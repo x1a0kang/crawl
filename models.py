@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timezone
+from typing import Callable, Dict, Iterable, List, Optional
 
 
 LEAD_FIELDS = [
@@ -42,6 +42,44 @@ CANDIDATE_FIELDS = [
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def default_last_years_window(years: int = 3, today: Optional[date] = None) -> tuple[str, str]:
+    """Compute an inclusive (date_from, date_to) window for the last N years.
+
+    The window ends at the running day (`today` if provided, otherwise the
+    current local date) and goes back `years` years. Returned strings follow
+    the ``YYYY-MM-DD`` format so they can be compared against ``event_date``.
+    """
+    end = today or date.today()
+    try:
+        start = end.replace(year=end.year - int(years))
+    except ValueError:
+        # Handle Feb 29 edge case by clamping to Feb 28.
+        start = end.replace(year=end.year - int(years), day=28)
+    return start.isoformat(), end.isoformat()
+
+
+@dataclass(frozen=True)
+class DiscoverContext:
+    """Per-run context passed to ``SourceConnector.discover``.
+
+    The connector is free to read whichever fields it needs; ``date_from`` /
+    ``date_to`` describe the inclusive event-date window the caller is
+    interested in, and ``max_pages`` caps how many paginated requests the
+    connector is allowed to issue before giving up. ``rendered_fetcher`` is
+    a callable that returns rendered HTML (or raw text) for a URL, used by
+    sources that need a JavaScript-capable fetcher.
+    """
+
+    date_from: str = ""
+    date_to: str = ""
+    max_pages: int = 120
+    rendered_fetcher: Optional[Callable[[str, int], str]] = None
+    warnings: List[str] = field(default_factory=list)
+
+    def warn(self, message: str) -> None:
+        self.warnings.append(message)
 
 
 @dataclass(frozen=True)
@@ -109,6 +147,5 @@ class ExtractResult:
 class SourceConnector:
     name = "source"
 
-    def discover(self) -> Iterable[Lead]:
+    def discover(self, context: Optional[DiscoverContext] = None) -> Iterable[Lead]:
         raise NotImplementedError
-
