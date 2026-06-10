@@ -7,13 +7,15 @@ The historical listing lives behind a small JSON endpoint:
 Each page returns an array of race objects; the connector walks
 ``page=1..context.max_pages``, builds a detail URL of the form
 ``https://app.sport-china.cn/race/#/offline/detail/{raceId}`` and stops when
-the page is empty, repeats a previous page (server-side deduped) or returns
-only races whose dates are already earlier than ``context.date_from``.
+the page is empty or repeats a previous page (server-side deduped). Transient
+page fetch failures are retried and then skipped so a single flaky page does
+not discard later results.
 """
 
 from __future__ import annotations
 
 import json
+import time
 from typing import Iterable, List, Optional, Sequence, Set
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -27,6 +29,9 @@ from crawl.sources.common import make_lead
 
 API_URL = "https://api.sport-china.cn/officialApi/getRaces"
 DETAIL_URL = "https://app.sport-china.cn/race/#/offline/detail/{race_id}"
+FETCH_ERRORS = (URLError, TimeoutError, OSError, ValueError)
+DEFAULT_RETRY_DELAYS = (0.5, 1.5)
+MAX_CONSECUTIVE_FETCH_FAILURES = 3
 
 
 class SportChinaSource(SourceConnector):
@@ -35,11 +40,13 @@ class SportChinaSource(SourceConnector):
     def __init__(
         self,
         json_by_page: Optional[Sequence[object]] = None,
+        retry_delays: Sequence[float] = DEFAULT_RETRY_DELAYS,
     ) -> None:
         # ``json_by_page`` is the fixture-friendly hook used by the test
         # suite: pass a list where each element is either a parsed JSON
         # payload (dict) or the raw text of an API response.
         self.json_by_page = json_by_page
+        self.retry_delays = tuple(retry_delays)
 
     def discover(self, context: Optional[DiscoverContext] = None) -> Iterable[Lead]:
         context = context or DiscoverContext()
@@ -52,15 +59,38 @@ class SportChinaSource(SourceConnector):
     # ---------------------------------------------------------------- live
 
     def _iter_live(self, context: DiscoverContext, max_pages: int) -> Iterable[Lead]:
+        seen_page_ids: Set[str] = set()
+        yielded_ids: Set[str] = set()
+        consecutive_failures = 0
         for page in range(1, max_pages + 1):
             try:
-                payload = self._fetch_page(page)
-            except (URLError, TimeoutError, OSError, ValueError) as exc:
-                context.warn(f"sport-china: page {page} fetch failed: {exc}")
-                return
+                payload = self._fetch_page_with_retries(page)
+            except FETCH_ERRORS as exc:
+                consecutive_failures += 1
+                context.warn(f"sport-china: page {page} fetch failed after retries: {exc}")
+                if consecutive_failures >= MAX_CONSECUTIVE_FETCH_FAILURES:
+                    context.warn(
+                        "sport-china: stopping after "
+                        f"{consecutive_failures} consecutive fetch failures"
+                    )
+                    return
+                continue
+            consecutive_failures = 0
             if not payload:
                 return
-            yield from self._harvest_page(payload, page, context)
+            rows = self._extract_race_list(payload)
+            if not rows:
+                return
+            row_ids = self._row_ids(rows)
+            if row_ids and row_ids.issubset(seen_page_ids):
+                return
+            seen_page_ids.update(row_ids)
+            for lead in self._harvest_rows(rows, page, context):
+                race_id = lead.source_url.rsplit("/", 1)[-1]
+                if race_id in yielded_ids:
+                    continue
+                yielded_ids.add(race_id)
+                yield lead
 
     @staticmethod
     def _fetch_page(page: int) -> object:
@@ -72,6 +102,17 @@ class SportChinaSource(SourceConnector):
             return None
         return json.loads(body)
 
+    def _fetch_page_with_retries(self, page: int) -> object:
+        for attempt, delay in enumerate((0, *self.retry_delays), start=1):
+            if delay:
+                time.sleep(delay)
+            try:
+                return self._fetch_page(page)
+            except FETCH_ERRORS:
+                if attempt > len(self.retry_delays):
+                    raise
+        return None
+
     # ----------------------------------------------------------- shared
 
     def _iter_pages(
@@ -80,7 +121,8 @@ class SportChinaSource(SourceConnector):
         context: DiscoverContext,
         max_pages: int,
     ) -> Iterable[Lead]:
-        seen_ids: Set[str] = set()
+        seen_page_ids: Set[str] = set()
+        yielded_ids: Set[str] = set()
         for page, payload in enumerate(payloads, start=1):
             if page > max_pages:
                 break
@@ -93,14 +135,19 @@ class SportChinaSource(SourceConnector):
                     break
             if not payload:
                 break
-            harvested = list(self._harvest_page(payload, page, context))
-            if not harvested:
+            rows = self._extract_race_list(payload)
+            if not rows:
                 break
+            row_ids = self._row_ids(rows)
+            if row_ids and row_ids.issubset(seen_page_ids):
+                break
+            seen_page_ids.update(row_ids)
+            harvested = list(self._harvest_rows(rows, page, context))
             for lead in harvested:
                 race_id = lead.source_url.rsplit("/", 1)[-1]
-                if race_id in seen_ids:
+                if race_id in yielded_ids:
                     continue
-                seen_ids.add(race_id)
+                yielded_ids.add(race_id)
                 yield lead
 
     @staticmethod
@@ -129,16 +176,25 @@ class SportChinaSource(SourceConnector):
         page: int,
         context: DiscoverContext,
     ) -> Iterable[Lead]:
-        rows = self._extract_race_list(payload)
+        yield from self._harvest_rows(self._extract_race_list(payload), page, context)
+
+    def _harvest_rows(
+        self,
+        rows: Sequence[dict],
+        page: int,
+        context: DiscoverContext,
+    ) -> Iterable[Lead]:
         for row in rows:
             lead = self._row_to_lead(row, page)
             if not lead:
                 continue
             if not self._lead_in_window(lead, context):
-                if context.date_from and lead.event_date and lead.event_date < context.date_from:
-                    return  # rows are date-sorted ascending; stop paging
                 continue
             yield lead
+
+    @staticmethod
+    def _row_ids(rows: Sequence[dict]) -> Set[str]:
+        return {str(row.get("raceId") or row.get("id") or "").strip() for row in rows} - {""}
 
     @staticmethod
     def _row_to_lead(row: dict, page: int) -> Optional[Lead]:

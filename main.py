@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -152,7 +152,10 @@ def discover_sources(
     context: DiscoverContext,
 ) -> tuple[List[Lead], List[str]]:
     leads: List[Lead] = []
-    for source_name in [item.strip() for item in source_names.split(",") if item.strip()]:
+    names = [item.strip() for item in source_names.split(",") if item.strip()]
+    print(f"discovering from {len(names)} source(s): {', '.join(names)}")
+    print(f"date window: {context.date_from or '*'} .. {context.date_to or '*'}, max_pages={context.max_pages}")
+    for source_name in names:
         source_class = SOURCE_REGISTRY.get(source_name)
         if source_class is None:
             raise SystemExit(f"unknown source: {source_name}")
@@ -160,12 +163,21 @@ def discover_sources(
             source = source_class(manual_seeds)
         else:
             source = source_class()
+        print(f"--- {source_name} ---")
         try:
-            leads.extend(list(source.discover(context)))
+            started = len(leads)
+            for lead in source.discover(context):
+                leads.append(lead)
+                print(f"  + {lead.event_name} | {lead.event_date or 'unknown date'} | {lead.source_url}")
+            added = len(leads) - started
+            print(f"  {source_name}: collected {added} lead(s)")
         except Exception as exc:
             print(f"warning: source {source_name} failed: {exc}", file=sys.stderr)
             context.warn(f"{source_name} failed: {exc}")
-    return dedupe_leads(leads), list(context.warnings)
+    print(f"deduping {len(leads)} raw lead(s)...")
+    deduped = dedupe_leads(leads)
+    print(f"after dedupe: {len(deduped)} unique lead(s)")
+    return deduped, list(context.warnings)
 
 
 def filter_leads_by_date(leads: Iterable[Lead], date_from: str = "", date_to: str = "") -> List[Lead]:

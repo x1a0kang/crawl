@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Dict, Iterable, List, Tuple
+from urllib.request import Request, urlopen
 
 from crawl.html_tools import extract_links, strip_tags
-from crawl.net import fetch_text
+from crawl.net import DEFAULT_USER_AGENT, fetch_text
 from crawl.models import Candidate, Evidence, Lead, now_iso
 from crawl.normalize.dates import extract_year
 from crawl.normalize.filters import is_mvp_race
@@ -22,6 +24,10 @@ REGISTRATION_END_PATTERNS = [
 FEE_PATTERN = re.compile(r"(报名费|费用|价格)[:：]?\s*([0-9]{2,4}\s*元(?:/[^\s，。；]+)?)")
 START_PATTERN = re.compile(r"(起点|起跑点)[:：]?\s*([^，。；\n]{2,40})")
 FINISH_PATTERN = re.compile(r"(终点)[:：]?\s*([^，。；\n]{2,40})")
+CHINA_MARATHON_DETAIL_API_URL = (
+    "https://api-changzheng.chinaath.com/changzheng-content-center-api/"
+    "api/homePage/official/searchById"
+)
 
 
 def extract_from_leads(leads: Iterable[Lead], fetch_details: bool = True) -> Tuple[List[Candidate], List[Evidence]]:
@@ -35,9 +41,12 @@ def extract_from_leads(leads: Iterable[Lead], fetch_details: bool = True) -> Tup
         links = []
         if fetch_details and lead.source_url.startswith(("http://", "https://")):
             try:
-                html = fetch_text(lead.source_url)
-                text = strip_tags(html)
-                links = extract_links(html, lead.source_url)
+                if lead.source_name == "china-marathon":
+                    text = fetch_china_marathon_detail_text(lead)
+                else:
+                    html = fetch_text(lead.source_url)
+                    text = strip_tags(html)
+                    links = extract_links(html, lead.source_url)
             except Exception:
                 text = ""
                 links = []
@@ -68,6 +77,58 @@ def extract_from_leads(leads: Iterable[Lead], fetch_details: bool = True) -> Tup
         evidence.extend(build_evidence(candidate, lead, fields))
         evidence.extend(build_search_query_evidence(candidate, lead))
     return candidates, evidence
+
+
+def fetch_china_marathon_detail_text(lead: Lead) -> str:
+    race_id = extract_china_marathon_race_id(lead.source_url)
+    if not race_id:
+        return ""
+    payload = {"id": race_id, "type": "SS"}
+    request = Request(
+        CHINA_MARATHON_DETAIL_API_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "User-Agent": DEFAULT_USER_AGENT,
+            "Accept": "application/json",
+            "Content-Type": "application/json;charset=UTF-8",
+            "Origin": "https://www.runchina.org.cn",
+            "Referer": "https://www.runchina.org.cn/#/race/v/list",
+        },
+    )
+    with urlopen(request, timeout=30) as response:
+        body = response.read().decode("utf-8", errors="replace")
+    return china_marathon_detail_text(json.loads(body))
+
+
+def extract_china_marathon_race_id(url: str) -> str:
+    match = re.search(r"(?:[?&#]|^)raceId=([^&#]+)", url or "")
+    return match.group(1) if match else ""
+
+
+def china_marathon_detail_text(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return ""
+    detail = data.get("ssdetails")
+    if not isinstance(detail, dict):
+        return ""
+    parts = [
+        detail.get("name") or "",
+        detail.get("gameDate") or "",
+        detail.get("raceGrade") or "",
+        detail.get("province") or "",
+        detail.get("city") or "",
+        detail.get("area") or "",
+        detail.get("project") or "",
+        detail.get("scale") or "",
+        detail.get("compNameOrganizer") or "",
+        detail.get("compNameUndertaker") or "",
+        detail.get("compNamePromotionUnit") or "",
+        detail.get("compNameCoOrganizer") or "",
+    ]
+    return normalize_space(" ".join(str(part) for part in parts if part))
 
 
 def extract_detail_fields(text: str, links, lead: Lead) -> Dict[str, str]:

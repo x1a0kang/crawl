@@ -1,42 +1,45 @@
 """China Marathon official listing source.
 
-The authoritative site is ``runchina.org.cn`` whose ``/#/race`` page is
-rendered by a Vue SPA behind a Tencent anti-bot script. The simple
-``urllib`` fetch returns the challenge page, so the only reliable first-pass
-strategy is to ask a rendered fetcher (the local ``firecrawl`` CLI) for the
-post-render HTML/markdown.
+The authoritative list is displayed at ``runchina.org.cn/#/race/v/list`` and
+backed by China Athletics' public JSON API. We use the API directly so
+pagination is controlled by ``pageNo``/``pageSize`` instead of depending on a
+rendered SPA page.
 
 This connector:
 
 * walks page 1..``context.max_pages``;
-* parses table rows into ``Lead`` objects with ``event_date``, ``event_name``,
+* parses API rows into ``Lead`` objects with ``event_date``, ``event_name``,
   ``province``/``city``, ``event_items`` and the original detail URL;
 * stops when a page adds no new leads, when the earliest date on the page
   is already older than ``context.date_from`` or when ``max_pages`` is hit;
-* warns (instead of raising) when no rendered fetcher is available so the
-  rest of the pipeline still produces sport-china / zuicool candidates.
+* falls back to the rendered table parser only when the API path fails and a
+  rendered fetcher is configured.
 """
 
-from __future__ import annotations
-
+import json
 import re
 from typing import Iterable, List, Optional, Sequence, Set, Tuple
+from urllib.request import Request, urlopen
 
 from crawl.html_tools import normalize_space, strip_tags
 from crawl.models import DiscoverContext, Lead, SourceConnector
+from crawl.net import DEFAULT_USER_AGENT
 from crawl.normalize.dates import extract_date
 from crawl.sources.common import make_lead
-from crawl.rendered import parse_firecrawl_markdown
 
 
-RACE_INDEX_URL = "https://www.runchina.org.cn/#/race"
+RACE_INDEX_URL = "https://www.runchina.org.cn/#/race/v/list"
+RACE_API_URL = (
+    "https://api-changzheng.chinaath.com/changzheng-content-center-api/"
+    "api/homePage/official/searchCompetitionMls"
+)
+DEFAULT_PAGE_SIZE = 30
 
 # Row schema on the rendered page is: 开赛时间 / 比赛名称 / 赛事等级 / 比赛地点 / 比赛项目
 # We do not hard-code that a row is a `<tr>` — the firecrawl output normalises
 # to markdown — so we look for the title pattern in each line block.
 EVENT_TITLE_PATTERN = re.compile(r"(20\d{2}[^|\n]{0,80}(?:马拉松|半程马拉松|全程马拉松|半马|全马)[^|\n]{0,40})")
 PROVINCE_CITY_PATTERN = re.compile(r"(?P<province>[^|:\n]{2,8}?)[\s|](?P<city>[^|:\n]{2,20})")
-ITEMS_PATTERN = re.compile(r"全马|半马|全程马拉松|半程马拉松|马拉松")
 
 
 class ChinaMarathonSource(SourceConnector):
@@ -48,12 +51,17 @@ class ChinaMarathonSource(SourceConnector):
         self,
         url: str = None,
         html_by_page: Optional[Sequence[str]] = None,
+        api_by_page: Optional[Sequence[object]] = None,
+        page_size: int = DEFAULT_PAGE_SIZE,
     ) -> None:
         self.url = url or self.default_url
         # ``html_by_page`` is the deterministic, fixture-friendly input used by
         # unit tests: a sequence of HTML payloads, one per page, that the
         # source will iterate through instead of issuing HTTP requests.
         self.html_by_page = html_by_page
+        # ``api_by_page`` is the same fixture hook for parsed/raw API payloads.
+        self.api_by_page = api_by_page
+        self.page_size = max(1, int(page_size or DEFAULT_PAGE_SIZE))
 
     def discover(self, context: Optional[DiscoverContext] = None) -> Iterable[Lead]:
         context = context or DiscoverContext()
@@ -62,16 +70,172 @@ class ChinaMarathonSource(SourceConnector):
         if self.html_by_page is not None:
             yield from self._iter_fixture_pages(context, max_pages)
             return
+        if self.api_by_page is not None:
+            yield from self._iter_api_payloads(self.api_by_page, context, max_pages)
+            return
+
+        try:
+            yield from self._iter_live_api_pages(context, max_pages)
+            return
+        except Exception as exc:
+            context.warn(f"china-marathon: API fetch failed: {exc}")
 
         fetcher = context.rendered_fetcher
         if fetcher is None:
             context.warn(
-                "china-marathon: no rendered fetcher available; "
-                "skipping runchina.org.cn (use --rendered-fetcher auto|firecrawl)."
+                "china-marathon: no rendered fetcher fallback available; "
+                "skipping runchina.org.cn."
             )
             return
 
         yield from self._iter_live_pages(context, max_pages, fetcher)
+
+    # ------------------------------------------------------------------ API
+
+    def _iter_live_api_pages(
+        self,
+        context: DiscoverContext,
+        max_pages: int,
+    ) -> Iterable[Lead]:
+        seen_keys: Set[Tuple[str, str]] = set()
+        for page in range(1, max_pages + 1):
+            payload = self._fetch_api_page(page)
+            rows = self._extract_api_rows(payload)
+            if not rows:
+                break
+            yield from self._harvest_api_rows(rows, page, context, seen_keys)
+            if self._page_is_past_window(rows, context):
+                break
+            page_count = self._extract_page_count(payload)
+            if page_count and page >= page_count:
+                break
+
+    def _iter_api_payloads(
+        self,
+        payloads: Sequence[object],
+        context: DiscoverContext,
+        max_pages: int,
+    ) -> Iterable[Lead]:
+        seen_keys: Set[Tuple[str, str]] = set()
+        for page, payload in enumerate(payloads, start=1):
+            if page > max_pages:
+                break
+            if isinstance(payload, (str, bytes)):
+                try:
+                    payload = json.loads(payload)
+                except ValueError:
+                    break
+            rows = self._extract_api_rows(payload)
+            if not rows:
+                break
+            yield from self._harvest_api_rows(rows, page, context, seen_keys)
+            if self._page_is_past_window(rows, context):
+                break
+
+    def _fetch_api_page(self, page: int) -> object:
+        payload = {
+            "provinceId": "",
+            "cityId": "",
+            "districtId": "",
+            "raceName": "",
+            "raceGrade": "",
+            "raceStartTime": "",
+            "pageNo": page,
+            "pageSize": self.page_size,
+        }
+        request = Request(
+            RACE_API_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "User-Agent": DEFAULT_USER_AGENT,
+                "Accept": "application/json",
+                "Content-Type": "application/json;charset=UTF-8",
+                "Origin": "https://www.runchina.org.cn",
+                "Referer": self.url,
+            },
+        )
+        with urlopen(request, timeout=30) as response:
+            body = response.read().decode("utf-8", errors="replace")
+        return json.loads(body)
+
+    @staticmethod
+    def _extract_api_rows(payload: object) -> List[dict]:
+        if not isinstance(payload, dict):
+            return []
+        data = payload.get("data")
+        if isinstance(data, dict):
+            rows = data.get("results") or data.get("list") or data.get("rows")
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+        rows = payload.get("results") or payload.get("list") or payload.get("rows")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+        return []
+
+    @staticmethod
+    def _extract_page_count(payload: object) -> int:
+        if not isinstance(payload, dict):
+            return 0
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return int(data.get("pageCount") or 0)
+        return int(payload.get("pageCount") or 0)
+
+    def _harvest_api_rows(
+        self,
+        rows: List[dict],
+        page: int,
+        context: DiscoverContext,
+        seen_keys: Set[Tuple[str, str]],
+    ) -> Iterable[Lead]:
+        for row in rows:
+            if self._api_row_is_past_window(row, context):
+                break
+            lead = self._api_row_to_lead(row, page)
+            if not lead:
+                continue
+            key = (lead.event_name, lead.event_date)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            yield lead
+
+    def _api_row_to_lead(self, row: dict, page: int) -> Optional[Lead]:
+        title = normalize_space(row.get("raceName") or row.get("name") or "")
+        if not title:
+            return None
+        event_date = extract_date(row.get("raceTime") or row.get("raceStartTime") or "")
+        address = normalize_space(row.get("raceAddress") or "")
+        province, city = self._split_location(address)
+        items = self._normalize_items(row.get("raceItem") or title)
+        if not items:
+            return None
+        race_id = str(row.get("raceId") or row.get("id") or "").strip()
+        source_url = f"{self.url}?page={page}"
+        if race_id:
+            source_url = f"{source_url}&raceId={race_id}"
+        raw_text = " ".join(
+            str(part)
+            for part in [
+                title,
+                event_date,
+                row.get("raceGrade") or "",
+                address,
+                row.get("raceItem") or "",
+            ]
+            if part
+        )
+        return make_lead(
+            source_name=self.name,
+            source_url=source_url,
+            raw_title=title,
+            event_name=title,
+            event_date=event_date,
+            province=province,
+            city=city,
+            event_items=items,
+            raw_text=raw_text,
+        )
 
     # ------------------------------------------------------------------ live
 
@@ -90,11 +254,13 @@ class ChinaMarathonSource(SourceConnector):
                         "china-marathon: rendered fetcher returned no content for page 1"
                     )
                 break
-            html = parse_firecrawl_markdown(payload)
-            rows = self._extract_rows_from_html(html, page=page)
+            rows = self._extract_rows_from_html(payload, page=page)
             if not rows:
                 break
-            yield from self._harvest_rows(rows, context, seen_keys)
+            leads = list(self._harvest_rows(rows, context, seen_keys))
+            if not leads:
+                break
+            yield from leads
 
     # --------------------------------------------------------------- fixture
 
@@ -168,6 +334,8 @@ class ChinaMarathonSource(SourceConnector):
         # Strategy 2: markdown table rows starting with '|'.
         for raw in html.splitlines():
             line = raw.strip()
+            if not line.startswith("|") and "<" in line:
+                line = normalize_space(strip_tags(line))
             if not line.startswith("|"):
                 continue
             cells = [normalize_space(cell) for cell in line.strip("|").split("|")]
@@ -185,20 +353,27 @@ class ChinaMarathonSource(SourceConnector):
         ``开赛时间 / 比赛名称 / 赛事等级 / 比赛地点 / 比赛项目``.
         """
         text = " | ".join(cells)
-        date = extract_date(text)
-        title_match = EVENT_TITLE_PATTERN.search(text)
-        title = title_match.group(1).strip() if title_match else (cells[1] if len(cells) > 1 else "")
+        date = extract_date(cells[0] if cells else "") or extract_date(text)
+        if len(cells) >= 5 and extract_date(cells[0]):
+            title = cells[1]
+        else:
+            title_match = EVENT_TITLE_PATTERN.search(text)
+            title = title_match.group(1).strip() if title_match else (cells[1] if len(cells) > 1 else "")
         location = cells[3] if len(cells) > 3 else ""
         province = ""
         city = ""
         if location:
-            match = PROVINCE_CITY_PATTERN.search(location)
-            if match:
-                province = match.group("province").strip()
-                city = match.group("city").strip()
+            if "/" in location:
+                province, city = ChinaMarathonSource._split_location(location)
             else:
-                city = location.strip()
-        items = ",".join(dict.fromkeys(match.group(0) for match in ITEMS_PATTERN.finditer(text)))
+                match = PROVINCE_CITY_PATTERN.search(location)
+                if match:
+                    province = match.group("province").strip()
+                    city = match.group("city").strip()
+                else:
+                    city = location.strip()
+        item_text = f"{title} {cells[4] if len(cells) > 4 else ''}"
+        items = ChinaMarathonSource._normalize_items(item_text)
         return {
             "event_date": date,
             "title": title,
@@ -207,6 +382,25 @@ class ChinaMarathonSource(SourceConnector):
             "event_items": items,
             "text": text,
         }
+
+    @staticmethod
+    def _normalize_items(text: str) -> str:
+        value = text or ""
+        items = []
+        if "全程" in value or "全马" in value:
+            items.append("全程马拉松")
+        if "半程" in value or "半马" in value:
+            items.append("半程马拉松")
+        if not items and "马拉松" in value:
+            items.append("马拉松")
+        return ",".join(dict.fromkeys(items))
+
+    @staticmethod
+    def _split_location(location: str) -> Tuple[str, str]:
+        parts = [part.strip() for part in (location or "").split("/") if part.strip()]
+        province = parts[0] if parts else ""
+        city = parts[1] if len(parts) > 1 else ""
+        return province, city
 
     def _row_to_lead(self, row: dict, context: DiscoverContext) -> Optional[Lead]:
         cells: Sequence[str] = row.get("cells") or []
@@ -241,7 +435,14 @@ class ChinaMarathonSource(SourceConnector):
         earliest = ""
         for row in rows:
             cells = row.get("cells") or []
-            date = extract_date(" ".join(cells))
+            date = extract_date(" ".join(cells)) or extract_date(row.get("raceTime") or "")
             if date and (not earliest or date < earliest):
                 earliest = date
         return bool(earliest) and earliest < context.date_from
+
+    @staticmethod
+    def _api_row_is_past_window(row: dict, context: DiscoverContext) -> bool:
+        if not context.date_from:
+            return False
+        date = extract_date(row.get("raceTime") or row.get("raceStartTime") or "")
+        return bool(date) and date < context.date_from

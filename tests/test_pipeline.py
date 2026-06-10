@@ -5,10 +5,15 @@ import sys
 import tempfile
 import unittest
 from datetime import date
+from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from crawl.extractors.detail import extract_from_leads
+from crawl.extractors.detail import (
+    china_marathon_detail_text,
+    extract_china_marathon_race_id,
+    extract_from_leads,
+)
 from crawl.main import (
     build_context,
     filter_leads_by_date,
@@ -90,6 +95,31 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(deduped[0].review_status, "pending_review")
         self.assertTrue(any(item.field_name == "manual_search_query" for item in evidence))
 
+    def test_china_marathon_detail_api_payload_to_text(self):
+        self.assertEqual(
+            extract_china_marathon_race_id("https://www.runchina.org.cn/#/race/v/list?page=1&raceId=1000396002"),
+            "1000396002",
+        )
+        text = china_marathon_detail_text(
+            {
+                "data": {
+                    "ssdetails": {
+                        "name": "2026蚌埠马拉松",
+                        "raceGrade": "A",
+                        "province": "安徽省",
+                        "city": "蚌埠市",
+                        "area": "蚌山区",
+                        "gameDate": "2026.04.26",
+                        "project": "全程,半程",
+                        "compNameOrganizer": "蚌埠市人民政府",
+                    }
+                }
+            }
+        )
+        self.assertIn("2026蚌埠马拉松", text)
+        self.assertIn("安徽省", text)
+        self.assertIn("全程,半程", text)
+
     def test_output_files_are_written(self):
         lead = Lead(
             lead_id="l1",
@@ -141,6 +171,79 @@ class DiscoverContextTest(unittest.TestCase):
 
 
 class ChinaMarathonSourceTest(unittest.TestCase):
+    def test_default_url_is_official_race_list(self):
+        self.assertEqual(ChinaMarathonSource().url, "https://www.runchina.org.cn/#/race/v/list")
+
+    def test_api_paginates_and_stops_when_past_date_from(self):
+        page1 = {
+            "data": {
+                "results": [
+                    {
+                        "raceId": 1001,
+                        "raceName": "2026弥勒半程马拉松",
+                        "raceGrade": "A",
+                        "raceTime": "2026-05-24",
+                        "raceAddress": "云南省/红河哈尼族彝族自治州/弥勒市",
+                        "raceItem": '["半程"]',
+                    }
+                ],
+                "pageCount": 3,
+            }
+        }
+        page2 = {
+            "data": {
+                "results": [
+                    {
+                        "raceId": 1002,
+                        "raceName": "2026蚌埠马拉松",
+                        "raceGrade": "A",
+                        "raceTime": "2026-04-26",
+                        "raceAddress": "安徽省/蚌埠市/蚌山区",
+                        "raceItem": '["全程","半程"]',
+                    },
+                    {
+                        "raceId": 1003,
+                        "raceName": "2026中国田径协会10公里精英赛（嘉善·大云）",
+                        "raceGrade": "A",
+                        "raceTime": "2026-04-26",
+                        "raceAddress": "浙江省/嘉兴市/嘉善县",
+                        "raceItem": '["10公里"]',
+                    },
+                ],
+                "pageCount": 3,
+            }
+        }
+        page3 = {
+            "data": {
+                "results": [
+                    {
+                        "raceId": 1004,
+                        "raceName": "2025杭州马拉松",
+                        "raceGrade": "A",
+                        "raceTime": "2025-11-02",
+                        "raceAddress": "浙江省/杭州市/上城区",
+                        "raceItem": '["全程","半程"]',
+                    }
+                ],
+                "pageCount": 3,
+            }
+        }
+
+        leads = list(
+            ChinaMarathonSource(api_by_page=[page1, page2, page3]).discover(
+                DiscoverContext(date_from="2026-01-01", date_to="2026-06-09", max_pages=10)
+            )
+        )
+
+        names = [lead.event_name for lead in leads]
+        self.assertEqual(names, ["2026弥勒半程马拉松", "2026蚌埠马拉松"])
+        mile = leads[0]
+        self.assertEqual(mile.province, "云南省")
+        self.assertEqual(mile.city, "红河哈尼族彝族自治州")
+        self.assertEqual(mile.event_items, "半程马拉松")
+        self.assertIn("raceId=1001", mile.source_url)
+        self.assertEqual(leads[1].event_items, "全程马拉松,半程马拉松")
+
     def test_parses_page1_table_and_filters_10km(self):
         page1 = (FIXTURES / "china_marathon_race_page1.html").read_text(encoding="utf-8")
         leads = list(
@@ -160,6 +263,57 @@ class ChinaMarathonSourceTest(unittest.TestCase):
         self.assertIn("云南", mile.province)
         self.assertIn("弥勒", mile.city)
 
+    def test_parses_firecrawl_markdown_table(self):
+        markdown = """
+| 开赛时间 | 比赛名称 | 赛事等级 | 比赛地点 | 比赛项目 |
+| --- | --- | --- | --- | --- |
+| 2026-05-24 | 2026弥勒半程马拉松 | A | 云南省/红河哈尼族彝族自治州/弥勒市 | 半程 |
+| 2026-04-26 | 2026蚌埠马拉松 | A | 安徽省/蚌埠市/蚌山区 | 全程、半程 |
+| 2026-05-03 | 2026中国田径协会10公里精英赛（湖北·大冶） | A | 湖北省/黄石市/大冶市 | 10公里 |
+"""
+        leads = list(
+            ChinaMarathonSource(html_by_page=[markdown]).discover(
+                DiscoverContext(date_from="2026-01-01", date_to="2026-06-09", max_pages=10)
+            )
+        )
+
+        names = [lead.event_name for lead in leads]
+        self.assertIn("2026弥勒半程马拉松", names)
+        self.assertIn("2026蚌埠马拉松", names)
+        self.assertFalse(any("10公里" in name for name in names))
+        mile = next(lead for lead in leads if lead.event_name == "2026弥勒半程马拉松")
+        self.assertEqual(mile.province, "云南省")
+        self.assertEqual(mile.city, "红河哈尼族彝族自治州")
+        self.assertEqual(mile.event_items, "半程马拉松")
+        bengbu = next(lead for lead in leads if lead.event_name == "2026蚌埠马拉松")
+        self.assertEqual(bengbu.event_items, "全程马拉松,半程马拉松")
+
+    def test_live_markdown_fetcher_stops_when_page_repeats(self):
+        markdown = """
+| 开赛时间 | 比赛名称 | 赛事等级 | 比赛地点 | 比赛项目 |
+| --- | --- | --- | --- | --- |
+| 2026-05-24 | 2026弥勒半程马拉松 | A | 云南省/红河哈尼族彝族自治州/弥勒市 | 半程 |
+"""
+        seen_pages = []
+
+        def fetcher(url, page):
+            seen_pages.append(page)
+            return markdown
+
+        leads = list(
+            ChinaMarathonSource().discover(
+                DiscoverContext(
+                    date_from="2026-01-01",
+                    date_to="2026-06-09",
+                    max_pages=5,
+                    rendered_fetcher=fetcher,
+                )
+            )
+        )
+
+        self.assertEqual([lead.event_name for lead in leads], ["2026弥勒半程马拉松"])
+        self.assertEqual(seen_pages, [1, 2])
+
     def test_pagination_stops_when_page_is_past_date_from(self):
         page1 = (FIXTURES / "china_marathon_race_page1.html").read_text(encoding="utf-8")
         page2 = (FIXTURES / "china_marathon_race_page2.html").read_text(encoding="utf-8")
@@ -171,11 +325,25 @@ class ChinaMarathonSourceTest(unittest.TestCase):
         # 2023 武汉马拉松 早于 2026-04-01，不应被收录
         self.assertFalse(any("武汉" in lead.event_name for lead in leads))
 
-    def test_no_fetcher_warns_and_returns_empty(self):
+    def test_api_fixture_does_not_require_rendered_fetcher(self):
         context = DiscoverContext(rendered_fetcher=None)
-        leads = list(ChinaMarathonSource().discover(context))
-        self.assertEqual(leads, [])
-        self.assertTrue(any("rendered" in msg for msg in context.warnings))
+        payload = {
+            "data": {
+                "results": [
+                    {
+                        "raceId": 1001,
+                        "raceName": "2026弥勒半程马拉松",
+                        "raceTime": "2026-05-24",
+                        "raceAddress": "云南省/红河哈尼族彝族自治州/弥勒市",
+                        "raceItem": '["半程"]',
+                    }
+                ],
+                "pageCount": 1,
+            }
+        }
+        leads = list(ChinaMarathonSource(api_by_page=[payload]).discover(context))
+        self.assertEqual([lead.event_name for lead in leads], ["2026弥勒半程马拉松"])
+        self.assertEqual(context.warnings, [])
 
 
 class SportChinaSourceTest(unittest.TestCase):
@@ -207,6 +375,29 @@ class SportChinaSourceTest(unittest.TestCase):
             )
         )
         self.assertEqual(leads, [])
+
+    def test_continues_after_page_without_date_matches(self):
+        page1 = (FIXTURES / "sport_china_race_page1.json").read_text(encoding="utf-8")
+        page7 = (FIXTURES / "sport_china_race_page7.json").read_text(encoding="utf-8")
+        leads = list(
+            SportChinaSource(json_by_page=[page1, page7]).discover(
+                DiscoverContext(date_from="2026-01-01", date_to="2026-06-09", max_pages=10)
+            )
+        )
+        self.assertTrue(any(lead.event_name == "2026南京仙林半程马拉松" for lead in leads))
+
+    def test_live_fetch_failure_skips_page_and_keeps_paging(self):
+        page1 = (FIXTURES / "sport_china_race_page1.json").read_text(encoding="utf-8")
+        page7 = (FIXTURES / "sport_china_race_page7.json").read_text(encoding="utf-8")
+        source = _FailingLiveSportChinaSource(
+            pages={1: page1, 3: page7, 4: {"data": []}},
+            failing_pages={2},
+        )
+        context = DiscoverContext(date_from="2026-01-01", date_to="2026-06-09", max_pages=4)
+        leads = list(source.discover(context))
+
+        self.assertTrue(any(lead.event_name == "2026南京仙林半程马拉松" for lead in leads))
+        self.assertTrue(any("page 2 fetch failed" in message for message in context.warnings))
 
 
 class ZuicoolSourceTest(unittest.TestCase):
@@ -259,6 +450,23 @@ def _Args(**kwargs):
     }
     defaults.update(kwargs)
     return Namespace(**defaults)
+
+
+class _FailingLiveSportChinaSource(SportChinaSource):
+    def __init__(self, pages, failing_pages):
+        super().__init__(retry_delays=())
+        self.pages = pages
+        self.failing_pages = set(failing_pages)
+
+    def _fetch_page(self, page):
+        if page in self.failing_pages:
+            raise URLError("EOF occurred in violation of protocol")
+        payload = self.pages.get(page)
+        if isinstance(payload, (str, bytes)):
+            import json
+
+            return json.loads(payload)
+        return payload
 
 
 if __name__ == "__main__":
