@@ -5,19 +5,25 @@ import sys
 import tempfile
 import unittest
 from datetime import date
+from subprocess import CompletedProcess
+from unittest.mock import patch
 from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from crawl.extractors.detail import (
     china_marathon_detail_text,
+    derive_race_status,
+    derive_registration_status,
     extract_china_marathon_race_id,
     extract_from_leads,
 )
+from crawl.extractors.web_enrichment import FirecrawlClient, FirecrawlWebEnricher, classify_source, parse_search_results
 from crawl.main import (
     build_context,
     filter_leads_by_date,
     resolve_date_window,
+    select_lead_source_names,
 )
 from crawl.models import (
     DiscoverContext,
@@ -26,11 +32,11 @@ from crawl.models import (
     now_iso,
 )
 from crawl.normalize.dedupe import dedupe_candidates
-from crawl.normalize.filters import is_mvp_race
+from crawl.normalize.filters import extract_item_types, is_mvp_race
 from crawl.sources.china_marathon import ChinaMarathonSource
 from crawl.sources.sport_china import SportChinaSource
 from crawl.sources.zuicool import ZuicoolSource
-from crawl.writers import write_candidates, write_evidence, write_leads
+from crawl.writers import write_events, write_evidence, write_leads
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -40,6 +46,9 @@ class PipelineTest(unittest.TestCase):
     def test_filter_keeps_marathon_and_excludes_non_mvp(self):
         self.assertTrue(is_mvp_race("2026成都马拉松", "全马"))
         self.assertTrue(is_mvp_race("2026金昌半程马拉松", "半马"))
+        self.assertTrue(is_mvp_race("2026中国田径协会10公里精英赛", "10公里"))
+        self.assertEqual(extract_item_types("全程马拉松 半马 10 K"), ["full_marathon", "half_marathon", "ten_kilometer"])
+        self.assertEqual(extract_item_types("42.195公里 21.1K 10km"), ["full_marathon", "half_marathon", "ten_kilometer"])
         self.assertFalse(is_mvp_race("2026中岳嵩山越野赛", ""))
         self.assertFalse(is_mvp_race("2026长沙世茂环球金融中心垂直马拉松赛", "马拉松"))
         self.assertFalse(is_mvp_race("2026探秘兵马俑线上赛-前世", ""))
@@ -92,12 +101,13 @@ class PipelineTest(unittest.TestCase):
         candidates, evidence = extract_from_leads([lead, lead], fetch_details=False)
         deduped = dedupe_candidates(candidates)
         self.assertEqual(len(deduped), 1)
-        self.assertEqual(deduped[0].review_status, "pending_review")
+        self.assertEqual(deduped[0].status, "draft")
+        self.assertEqual(deduped[0].item_types, ["full_marathon"])
         self.assertTrue(any(item.field_name == "manual_search_query" for item in evidence))
 
     def test_china_marathon_detail_api_payload_to_text(self):
         self.assertEqual(
-            extract_china_marathon_race_id("https://www.runchina.org.cn/#/race/v/list?page=1&raceId=1000396002"),
+            extract_china_marathon_race_id("china-marathon:race_id=1000396002;page=1"),
             "1000396002",
         )
         text = china_marathon_detail_text(
@@ -120,6 +130,41 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("安徽省", text)
         self.assertIn("全程,半程", text)
 
+    def test_china_marathon_internal_source_ref_fetches_detail(self):
+        lead = Lead(
+            lead_id="l1",
+            source_name="china-marathon",
+            source_url="china-marathon:race_id=1000396002;page=1",
+            raw_title="2026蚌埠马拉松",
+            event_name="2026蚌埠马拉松",
+            event_date="2026-04-26",
+            province="安徽省",
+            city="蚌埠市",
+            event_items="全程马拉松,半程马拉松",
+            discovered_at=now_iso(),
+            raw_hash="abc",
+        )
+        payload = {
+            "data": {
+                "ssdetails": {
+                    "name": "2026蚌埠马拉松",
+                    "raceGrade": "A",
+                    "province": "安徽省",
+                    "city": "蚌埠市",
+                    "area": "蚌山区",
+                    "gameDate": "2026.04.26",
+                    "project": "全程,半程,10公里",
+                    "compNameOrganizer": "蚌埠市人民政府",
+                }
+            }
+        }
+        with patch("crawl.extractors.detail.fetch_china_marathon_detail_payload", return_value=payload):
+            candidates, _evidence = extract_from_leads([lead], fetch_details=True)
+        self.assertEqual(candidates[0].district, "蚌山区")
+        self.assertEqual(candidates[0].level_label, "A类")
+        self.assertEqual(candidates[0].organizer, "蚌埠市人民政府")
+        self.assertEqual(candidates[0].item_types, ["full_marathon", "half_marathon", "ten_kilometer"])
+
     def test_output_files_are_written(self):
         lead = Lead(
             lead_id="l1",
@@ -138,14 +183,80 @@ class PipelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             write_leads(out / "leads.csv", [lead])
-            write_candidates(out / "candidates.csv", candidates)
+            write_events(out / "events.csv", candidates)
             write_evidence(out / "evidence.jsonl", evidence)
             with (out / "leads.csv").open("r", encoding="utf-8-sig") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows[0]["event_name"], "2026南京仙林半程马拉松")
+            with (out / "events.csv").open("r", encoding="utf-8-sig") as handle:
+                event_rows = list(csv.DictReader(handle))
+            self.assertEqual(event_rows[0]["item_types"], "{half_marathon}")
+            self.assertEqual(event_rows[0]["status"], "draft")
             with (out / "evidence.jsonl").open("r", encoding="utf-8") as handle:
                 first = json.loads(handle.readline())
             self.assertIn("candidate_id", first)
+
+    def test_firecrawl_enrichment_extracts_web_detail_fields(self):
+        lead = Lead(
+            lead_id="l1",
+            source_name="manual",
+            source_url="manual:fixture",
+            raw_title="2026蚌埠马拉松",
+            event_name="2026蚌埠马拉松",
+            event_date="2026-04-26",
+            province="安徽省",
+            city="蚌埠市",
+            event_items="全程马拉松,半程马拉松",
+            discovered_at=now_iso(),
+            raw_hash="abc",
+        )
+
+        def runner(args, timeout):
+            if args[1] == "search":
+                return CompletedProcess(
+                    args,
+                    0,
+                    json.dumps({"results": [{"title": "2026蚌埠马拉松竞赛规程", "url": "https://example.gov.cn/race"}]}),
+                    "",
+                )
+            return CompletedProcess(
+                args,
+                0,
+                "报名时间：2026年3月1日10:00至2026年3月20日18:00\n"
+                "比赛时间：2026年4月26日7:30\n"
+                "起点：蚌埠市民广场\n"
+                "终点：蚌埠体育中心\n"
+                "领物地点：蚌埠会展中心\n"
+                "世界田联金标",
+                "",
+            )
+
+        enricher = FirecrawlWebEnricher(FirecrawlClient(runner=runner), max_pages=1)
+        candidates, evidence = extract_from_leads([lead], fetch_details=True, web_enricher=enricher)
+        event = candidates[0]
+        self.assertEqual(event.registration_start_at, "2026-03-01T10:00:00+08:00")
+        self.assertEqual(event.registration_end_at, "2026-03-20T18:00:00+08:00")
+        self.assertEqual(event.start_time, "07:30:00")
+        self.assertEqual(event.start_point, "蚌埠市民广场")
+        self.assertEqual(event.finish_point, "蚌埠体育中心")
+        self.assertEqual(event.packet_pickup_location, "蚌埠会展中心")
+        self.assertTrue(any(item.source_type == "government_notice" for item in evidence))
+
+    def test_status_derivation(self):
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 3, 10, tzinfo=timezone.utc)
+        self.assertEqual(derive_registration_status("2026-03-01T10:00:00+08:00", "2026-03-20T18:00:00+08:00", today=now), "open")
+        self.assertEqual(derive_registration_status("2026-04-01T10:00:00+08:00", "2026-04-20T18:00:00+08:00", today=now), "not_started")
+        self.assertEqual(derive_registration_status("2026-02-01T10:00:00+08:00", "2026-02-20T18:00:00+08:00", today=now), "closed")
+        self.assertEqual(derive_race_status("2026-04-26", today=date(2026, 3, 10)), "upcoming")
+        self.assertEqual(derive_race_status("2026-03-10", today=date(2026, 3, 10)), "ongoing")
+        self.assertEqual(derive_race_status("2026-02-10", today=date(2026, 3, 10)), "ended")
+
+    def test_firecrawl_result_parsing_and_source_classification(self):
+        rows = parse_search_results(json.dumps({"data": [{"title": "报名须知", "url": "https://mp.weixin.qq.com/s/a"}]}))
+        self.assertEqual(rows[0].url, "https://mp.weixin.qq.com/s/a")
+        self.assertEqual(classify_source(rows[0].url, rows[0].title), "wechat_article")
 
 
 class DiscoverContextTest(unittest.TestCase):
@@ -168,6 +279,11 @@ class DiscoverContextTest(unittest.TestCase):
     def test_build_context_propagates_max_pages(self):
         ctx = build_context(_Args(date_from="", date_to="", last_years=0, max_pages=7))
         self.assertEqual(ctx.max_pages, 7)
+
+    def test_select_lead_source_names_uses_china_marathon_only_for_online_leads(self):
+        selected, ignored = select_lead_source_names(["china-marathon", "sport-china", "zuicool"])
+        self.assertEqual(selected, ["china-marathon"])
+        self.assertEqual(ignored, ["sport-china", "zuicool"])
 
 
 class ChinaMarathonSourceTest(unittest.TestCase):
@@ -236,15 +352,16 @@ class ChinaMarathonSourceTest(unittest.TestCase):
         )
 
         names = [lead.event_name for lead in leads]
-        self.assertEqual(names, ["2026弥勒半程马拉松", "2026蚌埠马拉松"])
+        self.assertEqual(names, ["2026弥勒半程马拉松", "2026蚌埠马拉松", "2026中国田径协会10公里精英赛（嘉善·大云）"])
         mile = leads[0]
         self.assertEqual(mile.province, "云南省")
         self.assertEqual(mile.city, "红河哈尼族彝族自治州")
         self.assertEqual(mile.event_items, "半程马拉松")
-        self.assertIn("raceId=1001", mile.source_url)
+        self.assertEqual(mile.source_url, "china-marathon:race_id=1001;page=1")
         self.assertEqual(leads[1].event_items, "全程马拉松,半程马拉松")
+        self.assertEqual(leads[2].event_items, "10公里")
 
-    def test_parses_page1_table_and_filters_10km(self):
+    def test_parses_page1_table_and_keeps_10km(self):
         page1 = (FIXTURES / "china_marathon_race_page1.html").read_text(encoding="utf-8")
         leads = list(
             ChinaMarathonSource(html_by_page=[page1]).discover(
@@ -255,8 +372,8 @@ class ChinaMarathonSourceTest(unittest.TestCase):
         self.assertIn("2026弥勒半程马拉松", names)
         self.assertIn("2026长春马拉松", names)
         self.assertIn("2026蚌埠马拉松", names)
-        # 10 公里赛事应被过滤
-        self.assertFalse(any("10公里" in name for name in names))
+        # 10 公里赛事应被收录
+        self.assertTrue(any("10公里" in name for name in names))
         # 解析到日期与城市
         mile = next(lead for lead in leads if lead.event_name == "2026弥勒半程马拉松")
         self.assertEqual(mile.event_date, "2026-05-25")
@@ -280,7 +397,7 @@ class ChinaMarathonSourceTest(unittest.TestCase):
         names = [lead.event_name for lead in leads]
         self.assertIn("2026弥勒半程马拉松", names)
         self.assertIn("2026蚌埠马拉松", names)
-        self.assertFalse(any("10公里" in name for name in names))
+        self.assertTrue(any("10公里" in name for name in names))
         mile = next(lead for lead in leads if lead.event_name == "2026弥勒半程马拉松")
         self.assertEqual(mile.province, "云南省")
         self.assertEqual(mile.city, "红河哈尼族彝族自治州")
@@ -343,6 +460,7 @@ class ChinaMarathonSourceTest(unittest.TestCase):
         }
         leads = list(ChinaMarathonSource(api_by_page=[payload]).discover(context))
         self.assertEqual([lead.event_name for lead in leads], ["2026弥勒半程马拉松"])
+        self.assertEqual(leads[0].source_url, "china-marathon:race_id=1001;page=1")
         self.assertEqual(context.warnings, [])
 
 

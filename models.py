@@ -19,24 +19,29 @@ LEAD_FIELDS = [
     "raw_hash",
 ]
 
-CANDIDATE_FIELDS = [
-    "candidate_id",
-    "lead_id",
-    "normalized_name",
-    "event_date",
+EVENT_FIELDS = [
+    "name",
     "province",
     "city",
-    "event_items",
+    "district",
+    "event_date",
+    "item_types",
+    "start_time",
     "registration_start_at",
     "registration_end_at",
-    "fee",
+    "lottery_result_date",
+    "registration_status",
+    "race_status",
+    "level_label",
+    "certification_label",
+    "organizer",
     "start_point",
     "finish_point",
+    "packet_pickup_location",
+    "address_text",
     "official_site_url",
-    "official_registration_url",
-    "route_image_url",
-    "confidence_score",
-    "review_status",
+    "description",
+    "status",
 ]
 
 
@@ -100,28 +105,46 @@ class Lead:
         return {field: str(asdict(self).get(field, "")) for field in LEAD_FIELDS}
 
 
+def pg_array_literal(values: Iterable[str]) -> str:
+    items = []
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            items.append(text.replace('"', '\\"'))
+    return "{" + ",".join(items) + "}"
+
+
 @dataclass(frozen=True)
-class Candidate:
+class EventCandidate:
     candidate_id: str
     lead_id: str
-    normalized_name: str
-    event_date: str
+    name: str
     province: str
     city: str
-    event_items: str
+    district: str
+    event_date: str
+    item_types: List[str]
+    start_time: str = ""
     registration_start_at: str = ""
     registration_end_at: str = ""
-    fee: str = ""
+    lottery_result_date: str = ""
+    registration_status: str = "not_started"
+    race_status: str = "upcoming"
+    level_label: str = ""
+    certification_label: str = ""
+    organizer: str = ""
     start_point: str = ""
     finish_point: str = ""
+    packet_pickup_location: str = ""
+    address_text: str = ""
     official_site_url: str = ""
-    official_registration_url: str = ""
-    route_image_url: str = ""
-    confidence_score: str = "0.50"
-    review_status: str = "pending_review"
+    description: str = ""
+    status: str = "draft"
 
     def to_row(self) -> Dict[str, str]:
-        return {field: str(asdict(self).get(field, "")) for field in CANDIDATE_FIELDS}
+        row = {field: str(asdict(self).get(field, "")) for field in EVENT_FIELDS}
+        row["item_types"] = pg_array_literal(self.item_types)
+        return row
 
 
 @dataclass(frozen=True)
@@ -133,6 +156,8 @@ class Evidence:
     source_url: str
     extracted_at: str
     confidence: str
+    source_title: str = ""
+    extracted_text: str = ""
 
     def to_row(self) -> Dict[str, str]:
         return asdict(self)
@@ -140,7 +165,7 @@ class Evidence:
 
 @dataclass
 class ExtractResult:
-    candidates: List[Candidate]
+    candidates: List[EventCandidate]
     evidence: List[Evidence]
 
 

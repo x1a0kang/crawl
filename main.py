@@ -9,15 +9,17 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from crawl.extractors.detail import extract_from_leads
+from crawl.extractors.web_enrichment import FirecrawlWebEnricher
 from crawl.models import DiscoverContext, Lead, default_last_years_window
 from crawl.normalize.dedupe import dedupe_candidates
 from crawl.normalize.dates import in_date_range
 from crawl.rendered import build_fetcher
 from crawl.sources import SOURCE_REGISTRY
-from crawl.writers import ensure_output_dir, read_leads, write_candidates, write_evidence, write_leads
+from crawl.writers import ensure_output_dir, read_leads, write_events, write_evidence, write_leads
 
 
-DEFAULT_SOURCES = "china-marathon,sport-china,zuicool"
+DEFAULT_SOURCES = "china-marathon"
+AUTHORITATIVE_LEAD_SOURCES = {"china-marathon", "manual"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_date_args(discover)
     add_discovery_args(discover)
 
-    extract = subparsers.add_parser("extract", help="Extract review candidates from leads")
+    extract = subparsers.add_parser("extract", help="Extract importable event rows from leads")
     extract.add_argument("--input", required=True, help="Input leads.csv path")
     extract.add_argument("--out", default="crawl/output", help="Output directory")
     extract.add_argument("--no-fetch", action="store_true", help="Do not fetch detail pages")
@@ -98,23 +100,24 @@ def main(argv: List[str] = None) -> int:
         out = ensure_output_dir(args.out)
         leads = read_leads(args.input)
         leads = filter_leads_by_date(leads, context.date_from, context.date_to)
-        candidates, evidence = extract_from_leads(leads, fetch_details=not args.no_fetch)
+        candidates, evidence = extract_from_leads_with_logging(leads, fetch_details=not args.no_fetch, context=context)
         candidates = dedupe_candidates(candidates)
-        write_candidates(out / "candidates.csv", candidates)
+        write_events(out / "events.csv", candidates)
         write_evidence(out / "evidence.jsonl", evidence)
-        print(f"wrote {len(candidates)} candidates and {len(evidence)} evidence rows to {out}")
+        emit_warnings(context.warnings)
+        print(f"wrote {len(candidates)} events and {len(evidence)} evidence rows to {out}")
         return 0
     if args.command == "all":
         out = ensure_output_dir(args.out)
-        leads, warnings = discover_sources(args.sources, args.manual_seeds, context)
+        leads, _warnings = discover_sources(args.sources, args.manual_seeds, context)
         leads = filter_leads_by_date(leads, context.date_from, context.date_to)
         write_leads(out / "leads.csv", leads)
-        candidates, evidence = extract_from_leads(leads, fetch_details=not args.no_fetch)
+        candidates, evidence = extract_from_leads_with_logging(leads, fetch_details=not args.no_fetch, context=context)
         candidates = dedupe_candidates(candidates)
-        write_candidates(out / "candidates.csv", candidates)
+        write_events(out / "events.csv", candidates)
         write_evidence(out / "evidence.jsonl", evidence)
-        emit_warnings(warnings)
-        print(f"wrote {len(leads)} leads, {len(candidates)} candidates and {len(evidence)} evidence rows to {out}")
+        emit_warnings(context.warnings)
+        print(f"wrote {len(leads)} leads, {len(candidates)} events and {len(evidence)} evidence rows to {out}")
         return 0
     parser.print_help()
     return 2
@@ -152,13 +155,22 @@ def discover_sources(
     context: DiscoverContext,
 ) -> tuple[List[Lead], List[str]]:
     leads: List[Lead] = []
-    names = [item.strip() for item in source_names.split(",") if item.strip()]
-    print(f"discovering from {len(names)} source(s): {', '.join(names)}")
+    requested_names = parse_source_names(source_names)
+    names, ignored_names = select_lead_source_names(requested_names)
+    if ignored_names:
+        context.warn(
+            "ignored non-authoritative lead source(s): "
+            f"{', '.join(ignored_names)}; online leads now come only from china-marathon"
+        )
+    if not names:
+        raise SystemExit(
+            "no authoritative lead source selected; use --sources china-marathon "
+            "or --sources manual"
+        )
+    print(f"discovering from {len(names)} lead source(s): {', '.join(names)}")
     print(f"date window: {context.date_from or '*'} .. {context.date_to or '*'}, max_pages={context.max_pages}")
     for source_name in names:
-        source_class = SOURCE_REGISTRY.get(source_name)
-        if source_class is None:
-            raise SystemExit(f"unknown source: {source_name}")
+        source_class = SOURCE_REGISTRY[source_name]
         if source_name == "manual":
             source = source_class(manual_seeds)
         else:
@@ -178,6 +190,49 @@ def discover_sources(
     deduped = dedupe_leads(leads)
     print(f"after dedupe: {len(deduped)} unique lead(s)")
     return deduped, list(context.warnings)
+
+
+def extract_from_leads_with_logging(
+    leads: List[Lead],
+    fetch_details: bool,
+    context: DiscoverContext,
+):
+    if fetch_details:
+        print(f"extracting events from {len(leads)} lead(s), fetching detail pages and web enrichment...")
+    else:
+        print(f"extracting events from {len(leads)} lead(s), detail fetch disabled...")
+
+    def progress(index: int, total: int, lead: Lead) -> None:
+        if fetch_details:
+            print(f"  detail {index}/{total}: {lead.event_name} | {lead.source_url}")
+
+    return extract_from_leads(
+        leads,
+        fetch_details=fetch_details,
+        progress=progress,
+        warn=context.warn,
+        web_enricher=FirecrawlWebEnricher() if fetch_details else None,
+    )
+
+
+def parse_source_names(source_names: str) -> List[str]:
+    names = [item.strip() for item in source_names.split(",") if item.strip()]
+    for source_name in names:
+        if source_name not in SOURCE_REGISTRY:
+            raise SystemExit(f"unknown source: {source_name}")
+    return names
+
+
+def select_lead_source_names(source_names: Iterable[str]) -> tuple[List[str], List[str]]:
+    selected: List[str] = []
+    ignored: List[str] = []
+    for source_name in source_names:
+        if source_name in AUTHORITATIVE_LEAD_SOURCES:
+            if source_name not in selected:
+                selected.append(source_name)
+        elif source_name not in ignored:
+            ignored.append(source_name)
+    return selected, ignored
 
 
 def filter_leads_by_date(leads: Iterable[Lead], date_from: str = "", date_to: str = "") -> List[Lead]:

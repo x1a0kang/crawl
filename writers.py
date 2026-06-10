@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Iterable, List
 
-from crawl.models import CANDIDATE_FIELDS, LEAD_FIELDS, Candidate, Evidence, Lead
+from crawl.models import EVENT_FIELDS, LEAD_FIELDS, EventCandidate, Evidence, Lead
 
 
 def ensure_output_dir(out_dir: str) -> Path:
@@ -27,9 +27,9 @@ def read_leads(path: str) -> List[Lead]:
         return [Lead(**row) for row in csv.DictReader(handle)]
 
 
-def write_candidates(path: Path, candidates: Iterable[Candidate]) -> None:
+def write_events(path: Path, candidates: Iterable[EventCandidate]) -> None:
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CANDIDATE_FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=EVENT_FIELDS)
         writer.writeheader()
         for candidate in candidates:
             writer.writerow(candidate.to_row())
@@ -39,4 +39,3 @@ def write_evidence(path: Path, evidence: Iterable[Evidence]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for item in evidence:
             handle.write(json.dumps(item.to_row(), ensure_ascii=False) + "\n")
-

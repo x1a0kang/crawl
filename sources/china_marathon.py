@@ -25,6 +25,7 @@ from crawl.html_tools import normalize_space, strip_tags
 from crawl.models import DiscoverContext, Lead, SourceConnector
 from crawl.net import DEFAULT_USER_AGENT
 from crawl.normalize.dates import extract_date
+from crawl.normalize.filters import infer_items
 from crawl.sources.common import make_lead
 
 
@@ -33,6 +34,7 @@ RACE_API_URL = (
     "https://api-changzheng.chinaath.com/changzheng-content-center-api/"
     "api/homePage/official/searchCompetitionMls"
 )
+SOURCE_REF_PREFIX = "china-marathon:"
 DEFAULT_PAGE_SIZE = 30
 
 # Row schema on the rendered page is: 开赛时间 / 比赛名称 / 赛事等级 / 比赛地点 / 比赛项目
@@ -211,9 +213,9 @@ class ChinaMarathonSource(SourceConnector):
         if not items:
             return None
         race_id = str(row.get("raceId") or row.get("id") or "").strip()
-        source_url = f"{self.url}?page={page}"
+        source_url = f"{SOURCE_REF_PREFIX}page={page}"
         if race_id:
-            source_url = f"{source_url}&raceId={race_id}"
+            source_url = f"{SOURCE_REF_PREFIX}race_id={race_id};page={page}"
         raw_text = " ".join(
             str(part)
             for part in [
@@ -385,15 +387,7 @@ class ChinaMarathonSource(SourceConnector):
 
     @staticmethod
     def _normalize_items(text: str) -> str:
-        value = text or ""
-        items = []
-        if "全程" in value or "全马" in value:
-            items.append("全程马拉松")
-        if "半程" in value or "半马" in value:
-            items.append("半程马拉松")
-        if not items and "马拉松" in value:
-            items.append("马拉松")
-        return ",".join(dict.fromkeys(items))
+        return infer_items(text)
 
     @staticmethod
     def _split_location(location: str) -> Tuple[str, str]:
@@ -415,7 +409,7 @@ class ChinaMarathonSource(SourceConnector):
             return None
         if not context.date_from and not context.date_to:
             pass  # no window to enforce
-        source_url = f"{self.url}?page={row.get('page', 1)}"
+        source_url = f"{SOURCE_REF_PREFIX}page={row.get('page', 1)}"
         return make_lead(
             source_name=self.name,
             source_url=source_url,
