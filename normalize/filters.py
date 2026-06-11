@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, List
+from typing import List
 import re
 
 
@@ -29,7 +29,7 @@ def extract_item_types(text: str) -> List[str]:
     if any(pattern.search(value) for pattern in HALF_PATTERNS):
         items.append("half_marathon")
     if any(pattern.search(value) for pattern in TEN_K_PATTERNS):
-        items.append("ten_kilometer")
+        items.append("ten_km")
     if not items and "马拉松" in value:
         items.append("full_marathon")
     return items
@@ -55,7 +55,7 @@ def infer_items(text: str) -> str:
         items.append("全程马拉松")
     if "half_marathon" in item_types:
         items.append("半程马拉松")
-    if "ten_kilometer" in item_types:
+    if "ten_km" in item_types:
         items.append("10公里")
     return ",".join(dict.fromkeys(items))
 

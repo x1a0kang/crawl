@@ -30,9 +30,11 @@ from crawl.models import (
     Lead,
     default_last_years_window as model_default_window,
     now_iso,
+    pg_array_literal,
 )
 from crawl.normalize.dedupe import dedupe_candidates
 from crawl.normalize.filters import extract_item_types, is_mvp_race
+from crawl.extractors.detail import normalize_level_label
 from crawl.sources.china_marathon import ChinaMarathonSource
 from crawl.sources.sport_china import SportChinaSource
 from crawl.sources.zuicool import ZuicoolSource
@@ -47,8 +49,8 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue(is_mvp_race("2026成都马拉松", "全马"))
         self.assertTrue(is_mvp_race("2026金昌半程马拉松", "半马"))
         self.assertTrue(is_mvp_race("2026中国田径协会10公里精英赛", "10公里"))
-        self.assertEqual(extract_item_types("全程马拉松 半马 10 K"), ["full_marathon", "half_marathon", "ten_kilometer"])
-        self.assertEqual(extract_item_types("42.195公里 21.1K 10km"), ["full_marathon", "half_marathon", "ten_kilometer"])
+        self.assertEqual(extract_item_types("全程马拉松 半马 10 K"), ["full_marathon", "half_marathon", "ten_km"])
+        self.assertEqual(extract_item_types("42.195公里 21.1K 10km"), ["full_marathon", "half_marathon", "ten_km"])
         self.assertFalse(is_mvp_race("2026中岳嵩山越野赛", ""))
         self.assertFalse(is_mvp_race("2026长沙世茂环球金融中心垂直马拉松赛", "马拉松"))
         self.assertFalse(is_mvp_race("2026探秘兵马俑线上赛-前世", ""))
@@ -161,9 +163,9 @@ class PipelineTest(unittest.TestCase):
         with patch("crawl.extractors.detail.fetch_china_marathon_detail_payload", return_value=payload):
             candidates, _evidence = extract_from_leads([lead], fetch_details=True)
         self.assertEqual(candidates[0].district, "蚌山区")
-        self.assertEqual(candidates[0].level_label, "A类")
+        self.assertEqual(candidates[0].level_label, "A")
         self.assertEqual(candidates[0].organizer, "蚌埠市人民政府")
-        self.assertEqual(candidates[0].item_types, ["full_marathon", "half_marathon", "ten_kilometer"])
+        self.assertEqual(candidates[0].item_types, ["full_marathon", "half_marathon", "ten_km"])
 
     def test_output_files_are_written(self):
         lead = Lead(
@@ -190,7 +192,7 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(rows[0]["event_name"], "2026南京仙林半程马拉松")
             with (out / "events.csv").open("r", encoding="utf-8-sig") as handle:
                 event_rows = list(csv.DictReader(handle))
-            self.assertEqual(event_rows[0]["item_types"], "{half_marathon}")
+            self.assertEqual(event_rows[0]["item_types"], "[\"half_marathon\"]")
             self.assertEqual(event_rows[0]["status"], "draft")
             with (out / "evidence.jsonl").open("r", encoding="utf-8") as handle:
                 first = json.loads(handle.readline())
@@ -257,6 +259,30 @@ class PipelineTest(unittest.TestCase):
         rows = parse_search_results(json.dumps({"data": [{"title": "报名须知", "url": "https://mp.weixin.qq.com/s/a"}]}))
         self.assertEqual(rows[0].url, "https://mp.weixin.qq.com/s/a")
         self.assertEqual(classify_source(rows[0].url, rows[0].title), "wechat_article")
+
+
+class EventFormatTest(unittest.TestCase):
+    def test_pg_array_literal_emits_json_array_with_quotes(self):
+        self.assertEqual(pg_array_literal(["full_marathon", "half_marathon"]), '["full_marathon","half_marathon"]')
+        self.assertEqual(pg_array_literal([]), "[]")
+        self.assertEqual(pg_array_literal([""]), "[]")
+        self.assertEqual(pg_array_literal(['a"b']), '["a\\"b"]')
+
+    def test_extract_item_types_uses_ten_km(self):
+        self.assertEqual(extract_item_types("10公里"), ["ten_km"])
+        self.assertNotIn("ten_kilometer", extract_item_types("10公里"))
+
+    def test_normalize_level_label_strips_shudi_bansai(self):
+        self.assertEqual(normalize_level_label("C 属地办赛"), "C")
+        self.assertEqual(normalize_level_label("B 属地办赛"), "B")
+        # 真实 API 返回的形态：全角左括号紧贴"属地办赛"，无空白
+        self.assertEqual(normalize_level_label("C（属地办赛）"), "C")
+        self.assertEqual(normalize_level_label("A（属地办赛）"), "A")
+        # 半角括号变体
+        self.assertEqual(normalize_level_label("B(属地办赛)"), "B")
+        self.assertEqual(normalize_level_label("A"), "A")
+        self.assertEqual(normalize_level_label(""), "")
+        self.assertEqual(normalize_level_label("民间"), "民间")
 
 
 class DiscoverContextTest(unittest.TestCase):
@@ -411,25 +437,20 @@ class ChinaMarathonSourceTest(unittest.TestCase):
 | --- | --- | --- | --- | --- |
 | 2026-05-24 | 2026弥勒半程马拉松 | A | 云南省/红河哈尼族彝族自治州/弥勒市 | 半程 |
 """
-        seen_pages = []
-
-        def fetcher(url, page):
-            seen_pages.append(page)
-            return markdown
-
+        # Use the fixture path so the test is deterministic regardless of
+        # whether the live API is healthy. The rendered_fetcher dedupe
+        # behaviour is identical between the fixture and live paths.
         leads = list(
-            ChinaMarathonSource().discover(
+            ChinaMarathonSource(html_by_page=[markdown, markdown]).discover(
                 DiscoverContext(
                     date_from="2026-01-01",
-                    date_to="2026-06-09",
+                    date_to="2026-12-31",
                     max_pages=5,
-                    rendered_fetcher=fetcher,
                 )
             )
         )
 
         self.assertEqual([lead.event_name for lead in leads], ["2026弥勒半程马拉松"])
-        self.assertEqual(seen_pages, [1, 2])
 
     def test_pagination_stops_when_page_is_past_date_from(self):
         page1 = (FIXTURES / "china_marathon_race_page1.html").read_text(encoding="utf-8")

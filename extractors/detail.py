@@ -421,9 +421,14 @@ def derive_race_status(event_date: str, today: Optional[date] = None) -> str:
 
 def normalize_level_label(value: str) -> str:
     text = normalize_space(value)
-    if text in {"A", "B", "C"}:
-        return f"{text}类"
-    return text
+    # 去掉 "属地办赛" 等描述后缀，兼容以下真实形态：
+    #   "C 属地办赛"      （半角空格）
+    #   "C（属地办赛）"   （全角左括号，无空格）
+    #   "C(属地办赛)"     （半角括号）
+    cleaned = re.sub(r"[\s（(]*属地办赛.*$", "", text)
+    if cleaned in {"A", "B", "C"}:
+        return cleaned
+    return cleaned or text
 
 
 def normalize_date_or_datetime(value: str, field: str) -> str:

@@ -110,8 +110,8 @@ def pg_array_literal(values: Iterable[str]) -> str:
     for value in values:
         text = str(value or "").strip()
         if text:
-            items.append(text.replace('"', '\\"'))
-    return "{" + ",".join(items) + "}"
+            items.append(text)
+    return "[" + ",".join(f'"{item.replace(chr(34), chr(92) + chr(34))}"' for item in items) + "]"
 
 
 @dataclass(frozen=True)

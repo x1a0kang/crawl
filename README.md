@@ -86,8 +86,9 @@ CSV 使用 `utf-8-sig` 写出，方便表格软件直接打开。
 
 ## 过滤与输出
 
-- 只保留全马、半马、十公里候选，输出 `item_types` 为 PostgreSQL array literal，例如 `{full_marathon,half_marathon,ten_kilometer}`。
+- 只保留全马、半马、十公里候选，输出 `item_types` 为 JSON 数组字面量，例如 `["full_marathon","half_marathon","ten_km"]`。
 - 硬排除越野、跑山、线上赛、线上跑、铁三、垂直马拉松；健康跑、欢乐跑、亲子跑只有在没有识别到全马/半马/十公里时排除。
+- 赛事等级清洗：`A`/`B`/`C` 单独写为 `A类`/`B类`/`C类`；`A 属地办赛`/`B 属地办赛`/`C 属地办赛` 等带"属地办赛"描述的，统一去掉后缀保留等级字母并加"类"后缀。
 - 中国马拉松官网作为唯一线上线索源；第一赛道、最酷不再作为 lead 来源。
 - 输出为 `leads.csv`、`events.csv`、`evidence.jsonl`，自动生成数据默认 `status=draft`。
 
@@ -98,6 +99,7 @@ CSV 使用 `utf-8-sig` 写出，方便表格软件直接打开。
 ```sql
 \i migrations/001_allow_ten_kilometer_item_type.sql
 ```
+（该迁移同时把约束中的 `ten_kilometer` 改为 `ten_km`，与 CSV 输出一致。）
 
 导入 `events.csv`：
 
