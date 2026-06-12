@@ -5,7 +5,6 @@ import sys
 import tempfile
 import unittest
 from datetime import date
-from subprocess import CompletedProcess
 from unittest.mock import patch
 from urllib.error import URLError
 
@@ -18,7 +17,6 @@ from crawl.extractors.detail import (
     extract_china_marathon_race_id,
     extract_from_leads,
 )
-from crawl.extractors.web_enrichment import FirecrawlClient, FirecrawlWebEnricher, classify_source, parse_search_results
 from crawl.main import (
     build_context,
     filter_leads_by_date,
@@ -100,12 +98,12 @@ class PipelineTest(unittest.TestCase):
             discovered_at=now_iso(),
             raw_hash="abc",
         )
-        candidates, evidence = extract_from_leads([lead, lead], fetch_details=False)
+        candidates, evidence = extract_from_leads([lead, lead])
         deduped = dedupe_candidates(candidates)
         self.assertEqual(len(deduped), 1)
         self.assertEqual(deduped[0].status, "draft")
         self.assertEqual(deduped[0].item_types, ["full_marathon"])
-        self.assertTrue(any(item.field_name == "manual_search_query" for item in evidence))
+        self.assertFalse(any(item.field_name == "manual_search_query" for item in evidence))
 
     def test_china_marathon_detail_api_payload_to_text(self):
         self.assertEqual(
@@ -161,7 +159,7 @@ class PipelineTest(unittest.TestCase):
             }
         }
         with patch("crawl.extractors.detail.fetch_china_marathon_detail_payload", return_value=payload):
-            candidates, _evidence = extract_from_leads([lead], fetch_details=True)
+            candidates, _evidence = extract_from_leads([lead])
         self.assertEqual(candidates[0].district, "蚌山区")
         self.assertEqual(candidates[0].level_label, "A")
         self.assertEqual(candidates[0].organizer, "蚌埠市人民政府")
@@ -181,7 +179,7 @@ class PipelineTest(unittest.TestCase):
             discovered_at=now_iso(),
             raw_hash="abc",
         )
-        candidates, evidence = extract_from_leads([lead], fetch_details=False)
+        candidates, evidence = extract_from_leads([lead])
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             write_leads(out / "leads.csv", [lead])
@@ -198,52 +196,6 @@ class PipelineTest(unittest.TestCase):
                 first = json.loads(handle.readline())
             self.assertIn("candidate_id", first)
 
-    def test_firecrawl_enrichment_extracts_web_detail_fields(self):
-        lead = Lead(
-            lead_id="l1",
-            source_name="manual",
-            source_url="manual:fixture",
-            raw_title="2026蚌埠马拉松",
-            event_name="2026蚌埠马拉松",
-            event_date="2026-04-26",
-            province="安徽省",
-            city="蚌埠市",
-            event_items="全程马拉松,半程马拉松",
-            discovered_at=now_iso(),
-            raw_hash="abc",
-        )
-
-        def runner(args, timeout):
-            if args[1] == "search":
-                return CompletedProcess(
-                    args,
-                    0,
-                    json.dumps({"results": [{"title": "2026蚌埠马拉松竞赛规程", "url": "https://example.gov.cn/race"}]}),
-                    "",
-                )
-            return CompletedProcess(
-                args,
-                0,
-                "报名时间：2026年3月1日10:00至2026年3月20日18:00\n"
-                "比赛时间：2026年4月26日7:30\n"
-                "起点：蚌埠市民广场\n"
-                "终点：蚌埠体育中心\n"
-                "领物地点：蚌埠会展中心\n"
-                "世界田联金标",
-                "",
-            )
-
-        enricher = FirecrawlWebEnricher(FirecrawlClient(runner=runner), max_pages=1)
-        candidates, evidence = extract_from_leads([lead], fetch_details=True, web_enricher=enricher)
-        event = candidates[0]
-        self.assertEqual(event.registration_start_at, "2026-03-01T10:00:00+08:00")
-        self.assertEqual(event.registration_end_at, "2026-03-20T18:00:00+08:00")
-        self.assertEqual(event.start_time, "07:30:00")
-        self.assertEqual(event.start_point, "蚌埠市民广场")
-        self.assertEqual(event.finish_point, "蚌埠体育中心")
-        self.assertEqual(event.packet_pickup_location, "蚌埠会展中心")
-        self.assertTrue(any(item.source_type == "government_notice" for item in evidence))
-
     def test_status_derivation(self):
         from datetime import datetime, timezone
 
@@ -254,12 +206,6 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(derive_race_status("2026-04-26", today=date(2026, 3, 10)), "upcoming")
         self.assertEqual(derive_race_status("2026-03-10", today=date(2026, 3, 10)), "ongoing")
         self.assertEqual(derive_race_status("2026-02-10", today=date(2026, 3, 10)), "ended")
-
-    def test_firecrawl_result_parsing_and_source_classification(self):
-        rows = parse_search_results(json.dumps({"data": [{"title": "报名须知", "url": "https://mp.weixin.qq.com/s/a"}]}))
-        self.assertEqual(rows[0].url, "https://mp.weixin.qq.com/s/a")
-        self.assertEqual(classify_source(rows[0].url, rows[0].title), "wechat_article")
-
 
 class EventFormatTest(unittest.TestCase):
     def test_pg_array_literal_emits_json_array_with_quotes(self):
@@ -406,7 +352,7 @@ class ChinaMarathonSourceTest(unittest.TestCase):
         self.assertIn("云南", mile.province)
         self.assertIn("弥勒", mile.city)
 
-    def test_parses_firecrawl_markdown_table(self):
+    def test_parses_markdown_table_fixture(self):
         markdown = """
 | 开赛时间 | 比赛名称 | 赛事等级 | 比赛地点 | 比赛项目 |
 | --- | --- | --- | --- | --- |
@@ -431,15 +377,14 @@ class ChinaMarathonSourceTest(unittest.TestCase):
         bengbu = next(lead for lead in leads if lead.event_name == "2026蚌埠马拉松")
         self.assertEqual(bengbu.event_items, "全程马拉松,半程马拉松")
 
-    def test_live_markdown_fetcher_stops_when_page_repeats(self):
+    def test_markdown_fixture_stops_when_page_repeats(self):
         markdown = """
 | 开赛时间 | 比赛名称 | 赛事等级 | 比赛地点 | 比赛项目 |
 | --- | --- | --- | --- | --- |
 | 2026-05-24 | 2026弥勒半程马拉松 | A | 云南省/红河哈尼族彝族自治州/弥勒市 | 半程 |
 """
         # Use the fixture path so the test is deterministic regardless of
-        # whether the live API is healthy. The rendered_fetcher dedupe
-        # behaviour is identical between the fixture and live paths.
+        # whether the live API is healthy.
         leads = list(
             ChinaMarathonSource(html_by_page=[markdown, markdown]).discover(
                 DiscoverContext(
@@ -463,8 +408,8 @@ class ChinaMarathonSourceTest(unittest.TestCase):
         # 2023 武汉马拉松 早于 2026-04-01，不应被收录
         self.assertFalse(any("武汉" in lead.event_name for lead in leads))
 
-    def test_api_fixture_does_not_require_rendered_fetcher(self):
-        context = DiscoverContext(rendered_fetcher=None)
+    def test_api_fixture_uses_official_api_payload(self):
+        context = DiscoverContext()
         payload = {
             "data": {
                 "results": [
@@ -585,7 +530,6 @@ def _Args(**kwargs):
         "date_to": "",
         "last_years": 0,
         "max_pages": 120,
-        "rendered_fetcher": "auto",
     }
     defaults.update(kwargs)
     return Namespace(**defaults)

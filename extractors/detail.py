@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional
 from urllib.request import Request, urlopen
 
 from crawl.models import EventCandidate, Evidence, Lead, now_iso
@@ -20,56 +20,32 @@ CHINA_MARATHON_DETAIL_API_URL = (
 )
 CHINA_MARATHON_DETAIL_TIMEOUT = 10
 
-REGISTRATION_RANGE_PATTERN = re.compile(
-    r"(?:报名时间|报名日期|报名期限|报名通道|报名).*?"
-    r"(20\d{2}[-./年]\d{1,2}[-./月]\d{1,2}日?(?:\s*\d{1,2}[:：]\d{2})?).{0,20}?"
-    r"(?:至|到|—|-|~|－).{0,20}?"
-    r"(20\d{2}[-./年]\d{1,2}[-./月]\d{1,2}日?(?:\s*\d{1,2}[:：]\d{2})?)"
-)
-REGISTRATION_START_PATTERNS = [
-    re.compile(r"(?:报名开始|报名开启|开始报名|报名启动)[:：]?\s*(20\d{2}[-./年]\d{1,2}[-./月]\d{1,2}日?(?:\s*\d{1,2}[:：]\d{2})?)"),
-    re.compile(r"预报名时间[:：]?\s*(20\d{2}[-./年]\d{1,2}[-./月]\d{1,2}日?)"),
-]
-REGISTRATION_END_PATTERNS = [
-    re.compile(r"(?:报名截止|截止报名|报名结束)[:：]?\s*(20\d{2}[-./年]\d{1,2}[-./月]\d{1,2}日?(?:\s*\d{1,2}[:：]\d{2})?)"),
-]
-LOTTERY_PATTERNS = [
-    re.compile(r"(?:抽签结果|中签结果|出签结果|开奖结果|出签).*?(20\d{2}[-./年]\d{1,2}[-./月]\d{1,2}日?)"),
-]
-START_TIME_PATTERNS = [
-    re.compile(r"(?:比赛时间|发枪时间|起跑时间|开跑时间)[:：]?\s*(?:20\d{2}[-./年]\d{1,2}[-./月]\d{1,2}日?)?\s*(\d{1,2}[:：]\d{2})"),
-]
-START_POINT_PATTERN = re.compile(r"(?:起点|起跑点|起跑地点)[:：]?\s*([^，。；\n\r]{2,80})")
-FINISH_POINT_PATTERN = re.compile(r"(?:终点|终点位置)[:：]?\s*([^，。；\n\r]{2,80})")
-PACKET_PICKUP_PATTERN = re.compile(r"(?:领物地点|领物处|装备领取地点|参赛物品领取地点)[:：]?\s*([^，。；\n\r]{2,100})")
-CERTIFICATION_PATTERNS = [
-    re.compile(r"世界田联(?:白金标|金标|银标|铜标)"),
-    re.compile(r"(?:白金标|金标|银标|铜标|精英牌|标牌)"),
-]
-
-
 ProgressCallback = Callable[[int, int, Lead], None]
 WarningCallback = Callable[[str], None]
 
 
-class WebEnricher:
-    def enrich(self, lead: Lead, candidate_id_value: str) -> Tuple[Dict[str, str], List[Evidence]]:
-        raise NotImplementedError
-
-
 @dataclass
 class EventBuild:
+    """Mutable build state for one importable event row.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
+
     fields: Dict[str, object]
     evidence: List[Evidence]
 
 
 def extract_from_leads(
     leads: Iterable[Lead],
-    fetch_details: bool = True,
     progress: Optional[ProgressCallback] = None,
     warn: Optional[WarningCallback] = None,
-    web_enricher: Optional[WebEnricher] = None,
-) -> Tuple[List[EventCandidate], List[Evidence]]:
+) -> tuple[List[EventCandidate], List[Evidence]]:
+    """Build events from leads using only China Marathon official detail API.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     lead_list = list(leads)
     candidates: List[EventCandidate] = []
     evidence: List[Evidence] = []
@@ -80,8 +56,10 @@ def extract_from_leads(
         if progress is not None:
             progress(index, total, lead)
 
+        # Step 1: create a minimal event row from the official list lead.
         build = build_event_from_lead(lead)
-        if fetch_details and lead.source_name == "china-marathon":
+        # Step 2: enrich only with the China Marathon searchById API.
+        if lead.source_name == "china-marathon":
             try:
                 payload = fetch_china_marathon_detail_payload(lead)
                 official_fields = china_marathon_detail_fields(payload, lead)
@@ -90,7 +68,7 @@ def extract_from_leads(
                     build_field_evidence(
                         "",
                         official_fields,
-                        "official_index",
+                        "official_detail",
                         lead.source_url,
                         source_title=lead.event_name,
                         extracted_text=china_marathon_detail_text(payload),
@@ -101,6 +79,8 @@ def extract_from_leads(
                 if warn is not None:
                     warn(f"detail fetch failed for {lead.source_name} {lead.event_name}: {exc}")
 
+        # Step 3: derive stable ids after official detail has had a chance to
+        # override name/date/city.
         cid = candidate_id(
             normalize_event_name(str(build.fields.get("name") or lead.event_name)),
             str(build.fields.get("event_date") or lead.event_date),
@@ -108,24 +88,20 @@ def extract_from_leads(
         )
         build.evidence = [replace_candidate_id(item, cid) for item in build.evidence]
 
-        if fetch_details and web_enricher is not None:
-            try:
-                web_fields, web_evidence = web_enricher.enrich(lead, cid)
-                merge_fields(build.fields, web_fields)
-                build.evidence.extend(web_evidence)
-            except Exception as exc:
-                if warn is not None:
-                    warn(f"web enrichment failed for {lead.event_name}: {exc}")
-
+        # Step 4: normalize the final CSV row and evidence records.
         candidate = event_candidate_from_fields(cid, lead.lead_id, build.fields)
         candidates.append(candidate)
         evidence.extend(build.evidence)
         evidence.extend(build_candidate_status_evidence(candidate))
-        evidence.extend(build_search_query_evidence(cid, lead))
     return candidates, evidence
 
 
 def build_event_from_lead(lead: Lead) -> EventBuild:
+    """Build the base event row from a lead row.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     item_types = extract_item_types(f"{lead.event_name} {lead.event_items}")
     fields: Dict[str, object] = {
         "name": lead.event_name,
@@ -142,6 +118,11 @@ def build_event_from_lead(lead: Lead) -> EventBuild:
 
 
 def fetch_china_marathon_detail_payload(lead: Lead) -> object:
+    """Fetch one China Marathon official detail payload by internal race id.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     race_id = extract_china_marathon_race_id(lead.source_url)
     if not race_id:
         return {}
@@ -163,15 +144,30 @@ def fetch_china_marathon_detail_payload(lead: Lead) -> object:
 
 
 def fetch_china_marathon_detail_text(lead: Lead) -> str:
+    """Fetch and flatten one China Marathon detail payload for evidence text.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     return china_marathon_detail_text(fetch_china_marathon_detail_payload(lead))
 
 
 def extract_china_marathon_race_id(url: str) -> str:
+    """Extract the China Marathon race id from an internal source reference.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     match = re.search(r"^china-marathon:race_id=([^;]+)(?:;|$)", url or "")
     return match.group(1) if match else ""
 
 
 def china_marathon_detail_fields(payload: object, lead: Lead) -> Dict[str, object]:
+    """Map official detail payload fields to event CSV fields.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     detail = china_marathon_detail_object(payload)
     if not detail:
         return {}
@@ -195,6 +191,11 @@ def china_marathon_detail_fields(payload: object, lead: Lead) -> Dict[str, objec
 
 
 def china_marathon_detail_object(payload: object) -> Dict[str, object]:
+    """Return the ``ssdetails`` object from the official detail response.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     if not isinstance(payload, dict):
         return {}
     data = payload.get("data")
@@ -205,6 +206,11 @@ def china_marathon_detail_object(payload: object) -> Dict[str, object]:
 
 
 def china_marathon_detail_text(payload: object) -> str:
+    """Flatten official detail fields into compact evidence text.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     detail = china_marathon_detail_object(payload)
     if not detail:
         return ""
@@ -225,48 +231,12 @@ def china_marathon_detail_text(payload: object) -> str:
     return normalize_space(" ".join(str(part) for part in parts if part))
 
 
-def extract_detail_fields(text: str, source_url: str = "") -> Dict[str, str]:
-    compact_text = normalize_space(text)
-    fields: Dict[str, str] = {}
-    range_match = REGISTRATION_RANGE_PATTERN.search(compact_text)
-    if range_match:
-        fields["registration_start_at"] = normalize_datetime(range_match.group(1))
-        fields["registration_end_at"] = normalize_datetime(range_match.group(2))
-    for field, patterns in [
-        ("registration_start_at", REGISTRATION_START_PATTERNS),
-        ("registration_end_at", REGISTRATION_END_PATTERNS),
-        ("lottery_result_date", LOTTERY_PATTERNS),
-        ("start_time", START_TIME_PATTERNS),
-    ]:
-        if fields.get(field):
-            continue
-        for pattern in patterns:
-            match = pattern.search(compact_text)
-            if match:
-                value = normalize_time(match.group(1)) if field == "start_time" else normalize_date_or_datetime(match.group(1), field)
-                fields[field] = value
-                break
-    for field, pattern in [
-        ("start_point", START_POINT_PATTERN),
-        ("finish_point", FINISH_POINT_PATTERN),
-        ("packet_pickup_location", PACKET_PICKUP_PATTERN),
-    ]:
-        match = pattern.search(compact_text)
-        if match:
-            fields[field] = clean_short_text(match.group(1))
-    for pattern in CERTIFICATION_PATTERNS:
-        match = pattern.search(compact_text)
-        if match:
-            fields["certification_label"] = normalize_space(match.group(0))
-            break
-    if source_url:
-        fields["official_site_url"] = source_url
-    if compact_text:
-        fields["description"] = compact_text[:300]
-    return {key: value for key, value in fields.items() if value}
-
-
 def event_candidate_from_fields(candidate_id_value: str, lead_id: str, fields: Dict[str, object]) -> EventCandidate:
+    """Normalize build fields into an importable event candidate.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     event_date = str(fields.get("event_date") or "")
     registration_start = str(fields.get("registration_start_at") or "")
     registration_end = str(fields.get("registration_end_at") or "")
@@ -312,6 +282,11 @@ def build_field_evidence(
     extracted_text: str = "",
     confidence: str = "0.75",
 ) -> List[Evidence]:
+    """Build field-level evidence rows for non-empty values.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     evidence: List[Evidence] = []
     for field_name, value in fields.items():
         if not value:
@@ -334,6 +309,11 @@ def build_field_evidence(
 
 
 def build_candidate_status_evidence(candidate: EventCandidate) -> List[Evidence]:
+    """Build evidence rows for statuses derived by the pipeline.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     fields = {
         "registration_status": candidate.registration_status,
         "race_status": candidate.race_status,
@@ -350,22 +330,12 @@ def build_candidate_status_evidence(candidate: EventCandidate) -> List[Evidence]
     )
 
 
-def build_search_query_evidence(candidate_id_value: str, lead: Lead) -> List[Evidence]:
-    queries = [
-        f"{lead.event_name} 竞赛规程",
-        f"{lead.event_name} 报名须知",
-        f"{lead.event_name} 报名时间",
-        f"{lead.event_name} 起点 终点",
-        f"{lead.event_name} 领物 地点",
-        f"{lead.event_name} 官方",
-    ]
-    return [
-        Evidence(candidate_id_value, "manual_search_query", query, "manual_followup", "", now_iso(), "0.50")
-        for query in queries
-    ]
-
-
 def replace_candidate_id(item: Evidence, candidate_id_value: str) -> Evidence:
+    """Replace placeholder candidate ids after final id derivation.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     return Evidence(
         candidate_id=candidate_id_value,
         field_name=item.field_name,
@@ -380,6 +350,11 @@ def replace_candidate_id(item: Evidence, candidate_id_value: str) -> Evidence:
 
 
 def merge_fields(base: Dict[str, object], incoming: Dict[str, object]) -> None:
+    """Merge official detail fields into the base lead fields.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     for key, value in incoming.items():
         if value and not base.get(key):
             base[key] = value
@@ -392,6 +367,11 @@ def merge_fields(base: Dict[str, object], incoming: Dict[str, object]) -> None:
 
 
 def derive_registration_status(start_at: str, end_at: str, today: Optional[datetime] = None) -> str:
+    """Derive registration status from start/end timestamps.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     now = today or datetime.now(timezone.utc)
     start = parse_datetime(start_at)
     end = parse_datetime(end_at)
@@ -405,6 +385,11 @@ def derive_registration_status(start_at: str, end_at: str, today: Optional[datet
 
 
 def derive_race_status(event_date: str, today: Optional[date] = None) -> str:
+    """Derive race status from the event date.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     if not event_date:
         return "upcoming"
     current = today or date.today()
@@ -420,6 +405,11 @@ def derive_race_status(event_date: str, today: Optional[date] = None) -> str:
 
 
 def normalize_level_label(value: str) -> str:
+    """Clean China Marathon race grade labels.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     text = normalize_space(value)
     # 去掉 "属地办赛" 等描述后缀，兼容以下真实形态：
     #   "C 属地办赛"      （半角空格）
@@ -431,11 +421,12 @@ def normalize_level_label(value: str) -> str:
     return cleaned or text
 
 
-def normalize_date_or_datetime(value: str, field: str) -> str:
-    return extract_date(value) if field == "lottery_result_date" else normalize_datetime(value)
-
-
 def normalize_datetime(value: str) -> str:
+    """Normalize a China-local date or date-time string to ISO timestamptz.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     date_value = extract_date(value)
     if not date_value:
         return ""
@@ -444,6 +435,11 @@ def normalize_datetime(value: str) -> str:
 
 
 def normalize_time(value: str) -> str:
+    """Normalize HH:MM strings to HH:MM:SS.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     match = re.search(r"(\d{1,2})[:：](\d{2})", value or "")
     if not match:
         return ""
@@ -452,15 +448,14 @@ def normalize_time(value: str) -> str:
 
 
 def parse_datetime(value: str) -> Optional[datetime]:
+    """Parse ISO datetime strings used by event candidates.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
     if not value:
         return None
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-
-
-def clean_short_text(value: str) -> str:
-    text = normalize_space(value)
-    text = re.split(r"(?:终点|终点位置|领物地点|领物处|装备领取地点|参赛物品领取地点|世界田联|报名时间|比赛时间)[:：]?", text, maxsplit=1)[0]
-    return normalize_space(re.sub(r"[。；，、].*$", "", text))

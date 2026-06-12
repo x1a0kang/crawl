@@ -5,7 +5,7 @@
 ## 目标
 
 - 从中国马拉松官方站发现赛事线索。
-- 从中国马拉松详情 API、Firecrawl 搜索结果和可访问公告页抽取字段。
+- 从中国马拉松详情 API 抽取基础详情字段。
 - 只保留 MVP 范围内的全马 / 半马 / 十公里赛事候选。
 - 输出可直接导入 `events` 表的 CSV，以及字段级证据 JSONL。
 
@@ -18,8 +18,7 @@
 python3 -m crawl.main all \
   --out crawl/output/last-3-years \
   --last-years 3 \
-  --max-pages 120 \
-  --rendered-fetcher auto
+  --max-pages 120
 
 # 也可以拆成两步：先发现、再抽取
 python3 -m crawl.main discover --out crawl/output/last-3-years --last-years 3
@@ -29,7 +28,7 @@ python3 -m crawl.main extract --input crawl/output/last-3-years/leads.csv --out 
 如果当前目录已经是 `crawl/`，也可以执行：
 
 ```bash
-python3 main.py all --out output --no-fetch --last-years 3
+python3 main.py all --out output --last-years 3
 ```
 
 显式日期范围仍可使用（覆盖 `--last-years`）：
@@ -39,18 +38,7 @@ python3 -m crawl.main all \
   --out crawl/output/2026-01-01_2026-06-09 \
   --date-from 2026-01-01 \
   --date-to 2026-06-09 \
-  --max-pages 120 \
-  --rendered-fetcher auto
-```
-
-如果只想先跑列表发现、不抓每个详情页和网络富化：
-
-```bash
-python3 -m crawl.main all \
-  --out crawl/output/2026-01-01_2026-06-09 \
-  --date-from 2026-01-01 \
-  --date-to 2026-06-09 \
-  --no-fetch
+  --max-pages 120
 ```
 
 ## CLI 标志
@@ -62,15 +50,13 @@ python3 -m crawl.main all \
 | `--date-from` / `--date-to` | 显式事件日期窗口，覆盖 `--last-years`。 |
 | `--last-years N` | 未传日期时按运行当天向前推 N 年（默认 3）。 |
 | `--max-pages N` | 每个源允许抓取的最大分页数（默认 120）。 |
-| `--rendered-fetcher auto\|firecrawl\|none` | 渲染抓取器选择；通常不需要，仅在中国马拉松官方 API 失败后作为页面兜底。 |
-| `--no-fetch` | 跳过中国马拉松详情 API 和 Firecrawl 网络富化（只保留列表阶段字段）。 |
 | `--manual-seeds` | 手工种子 CSV 路径（仅 `--sources manual`）。 |
 
 ## 输出文件
 
 - `output/leads.csv`：赛事线索。
 - `output/events.csv`：可直接导入 `events` 表的赛事候选，不包含 `id`、`created_at`、`updated_at`。
-- `output/evidence.jsonl`：字段级来源证据和人工追查查询词。
+- `output/evidence.jsonl`：字段级来源证据。
 
 CSV 使用 `utf-8-sig` 写出，方便表格软件直接打开。
 
@@ -78,7 +64,6 @@ CSV 使用 `utf-8-sig` 写出，方便表格软件直接打开。
 
 - `china-marathon`：中国马拉松官方网站 `https://www.runchina.org.cn/#/race/v/list`，通过官方接口 `searchCompetitionMls` 按 `pageNo` 翻页获取列表，再用 `searchById` 获取基础详情；解析后按 `date_from` 早停并保留全马、半马、十公里项目。`marathon.org.cn` 暂不作为权威源。
 - 中国马拉松 lead 的 `source_url` 是内部来源标识，格式如 `china-marathon:race_id=1000388111;page=1`；它不是网页 URL，详情抽取会用其中的 `race_id` 调用 POST 接口。
-- 网络详情富化使用 `firecrawl search` 发现竞赛规程、报名须知、起终点和领物公告，再用 `firecrawl scrape` 抽正文；没有 Firecrawl CLI 时自动跳过富化。
 - `sport-china`：第一赛道连接器仍保留在代码中用于调试，但不再参与 `leads.csv` 生成。
 - `zuicool`：最酷连接器仍保留在代码中用于调试，但不再参与 `leads.csv` 生成。
 - `manual`：从 `seeds.csv` 导入手工线索。
@@ -120,4 +105,4 @@ manual,https://example.com,2026某某半程马拉松,2026某某半程马拉松,2
 
 ## 依赖
 
-核心实现只使用 Python 标准库；详情富化和 `rendered-fetcher=firecrawl` 需要本机安装并登录 `firecrawl` CLI；`requirements.txt` 中列出的是后续增强依赖。
+核心实现只使用 Python 标准库；当前主流程不依赖第三方网页搜索或页面抓取工具。

@@ -3,17 +3,15 @@
 The authoritative list is displayed at ``runchina.org.cn/#/race/v/list`` and
 backed by China Athletics' public JSON API. We use the API directly so
 pagination is controlled by ``pageNo``/``pageSize`` instead of depending on a
-rendered SPA page.
+browser-rendered SPA page.
 
 This connector:
 
 * walks page 1..``context.max_pages``;
 * parses API rows into ``Lead`` objects with ``event_date``, ``event_name``,
-  ``province``/``city``, ``event_items`` and the original detail URL;
+  ``province``/``city``, ``event_items`` and the internal detail API ref;
 * stops when a page adds no new leads, when the earliest date on the page
-  is already older than ``context.date_from`` or when ``max_pages`` is hit;
-* falls back to the rendered table parser only when the API path fails and a
-  rendered fetcher is configured.
+  is already older than ``context.date_from`` or when ``max_pages`` is hit.
 """
 
 import json
@@ -37,14 +35,21 @@ RACE_API_URL = (
 SOURCE_REF_PREFIX = "china-marathon:"
 DEFAULT_PAGE_SIZE = 30
 
-# Row schema on the rendered page is: 开赛时间 / 比赛名称 / 赛事等级 / 比赛地点 / 比赛项目
-# We do not hard-code that a row is a `<tr>` — the firecrawl output normalises
-# to markdown — so we look for the title pattern in each line block.
+# Row schema in legacy table fixtures is:
+# 开赛时间 / 比赛名称 / 赛事等级 / 比赛地点 / 比赛项目.
+# The live CLI path uses the official JSON API; this table parser remains only
+# for deterministic fixture coverage of historical page shapes.
 EVENT_TITLE_PATTERN = re.compile(r"(20\d{2}[^|\n]{0,80}(?:马拉松|半程马拉松|全程马拉松|半马|全马)[^|\n]{0,40})")
 PROVINCE_CITY_PATTERN = re.compile(r"(?P<province>[^|:\n]{2,8}?)[\s|](?P<city>[^|:\n]{2,20})")
 
 
 class ChinaMarathonSource(SourceConnector):
+    """China Marathon official API source.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
+
     name = "china-marathon"
     default_url = RACE_INDEX_URL
     fallback_url = "https://www.marathon.org.cn/"
@@ -56,6 +61,11 @@ class ChinaMarathonSource(SourceConnector):
         api_by_page: Optional[Sequence[object]] = None,
         page_size: int = DEFAULT_PAGE_SIZE,
     ) -> None:
+        """Create a China Marathon source.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         self.url = url or self.default_url
         # ``html_by_page`` is the deterministic, fixture-friendly input used by
         # unit tests: a sequence of HTML payloads, one per page, that the
@@ -66,6 +76,11 @@ class ChinaMarathonSource(SourceConnector):
         self.page_size = max(1, int(page_size or DEFAULT_PAGE_SIZE))
 
     def discover(self, context: Optional[DiscoverContext] = None) -> Iterable[Lead]:
+        """Discover leads from fixtures or the official list API.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         context = context or DiscoverContext()
         max_pages = max(1, int(context.max_pages or 1))
 
@@ -81,16 +96,7 @@ class ChinaMarathonSource(SourceConnector):
             return
         except Exception as exc:
             context.warn(f"china-marathon: API fetch failed: {exc}")
-
-        fetcher = context.rendered_fetcher
-        if fetcher is None:
-            context.warn(
-                "china-marathon: no rendered fetcher fallback available; "
-                "skipping runchina.org.cn."
-            )
             return
-
-        yield from self._iter_live_pages(context, max_pages, fetcher)
 
     # ------------------------------------------------------------------ API
 
@@ -99,6 +105,11 @@ class ChinaMarathonSource(SourceConnector):
         context: DiscoverContext,
         max_pages: int,
     ) -> Iterable[Lead]:
+        """Page through the live official list API.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         seen_keys: Set[Tuple[str, str]] = set()
         for page in range(1, max_pages + 1):
             payload = self._fetch_api_page(page)
@@ -118,6 +129,11 @@ class ChinaMarathonSource(SourceConnector):
         context: DiscoverContext,
         max_pages: int,
     ) -> Iterable[Lead]:
+        """Read API fixture payloads for deterministic tests.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         seen_keys: Set[Tuple[str, str]] = set()
         for page, payload in enumerate(payloads, start=1):
             if page > max_pages:
@@ -135,6 +151,11 @@ class ChinaMarathonSource(SourceConnector):
                 break
 
     def _fetch_api_page(self, page: int) -> object:
+        """Fetch one official list API page.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         payload = {
             "provinceId": "",
             "cityId": "",
@@ -162,6 +183,11 @@ class ChinaMarathonSource(SourceConnector):
 
     @staticmethod
     def _extract_api_rows(payload: object) -> List[dict]:
+        """Extract race rows from an official API payload.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         if not isinstance(payload, dict):
             return []
         data = payload.get("data")
@@ -176,6 +202,11 @@ class ChinaMarathonSource(SourceConnector):
 
     @staticmethod
     def _extract_page_count(payload: object) -> int:
+        """Extract the API page count if the server returns one.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         if not isinstance(payload, dict):
             return 0
         data = payload.get("data")
@@ -190,6 +221,11 @@ class ChinaMarathonSource(SourceConnector):
         context: DiscoverContext,
         seen_keys: Set[Tuple[str, str]],
     ) -> Iterable[Lead]:
+        """Convert API rows into deduplicated leads.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         for row in rows:
             if self._api_row_is_past_window(row, context):
                 break
@@ -203,6 +239,11 @@ class ChinaMarathonSource(SourceConnector):
             yield lead
 
     def _api_row_to_lead(self, row: dict, page: int) -> Optional[Lead]:
+        """Map one official API row to a lead.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         title = normalize_space(row.get("raceName") or row.get("name") or "")
         if not title:
             return None
@@ -239,31 +280,6 @@ class ChinaMarathonSource(SourceConnector):
             raw_text=raw_text,
         )
 
-    # ------------------------------------------------------------------ live
-
-    def _iter_live_pages(
-        self,
-        context: DiscoverContext,
-        max_pages: int,
-        fetcher,
-    ) -> Iterable[Lead]:
-        seen_keys: Set[Tuple[str, str]] = set()
-        for page in range(1, max_pages + 1):
-            payload = fetcher(self.url, page)
-            if not payload:
-                if page == 1:
-                    context.warn(
-                        "china-marathon: rendered fetcher returned no content for page 1"
-                    )
-                break
-            rows = self._extract_rows_from_html(payload, page=page)
-            if not rows:
-                break
-            leads = list(self._harvest_rows(rows, context, seen_keys))
-            if not leads:
-                break
-            yield from leads
-
     # --------------------------------------------------------------- fixture
 
     def _iter_fixture_pages(
@@ -271,6 +287,11 @@ class ChinaMarathonSource(SourceConnector):
         context: DiscoverContext,
         max_pages: int,
     ) -> Iterable[Lead]:
+        """Read table fixtures used by legacy parser tests.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         seen_keys: Set[Tuple[str, str]] = set()
         for page, html in enumerate(self.html_by_page or [], start=1):
             if page > max_pages:
@@ -288,6 +309,11 @@ class ChinaMarathonSource(SourceConnector):
         context: DiscoverContext,
         seen_keys: Set[Tuple[str, str]],
     ) -> Iterable[Lead]:
+        """Convert parsed table rows into deduplicated leads.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         emitted = 0
         for row in rows:
             if self._page_is_past_window([row], context):
@@ -312,7 +338,7 @@ class ChinaMarathonSource(SourceConnector):
 
     @staticmethod
     def _extract_rows_from_html(html: str, page: int = 1) -> List[dict]:
-        """Split the rendered HTML/markdown into race rows.
+        """Split fixture HTML/markdown into race rows.
 
         The real page is a single big table; the markdown converter flattens
         it to ``| ... |`` rows, but to remain robust we simply split on
@@ -322,7 +348,7 @@ class ChinaMarathonSource(SourceConnector):
             return []
         rows: List[dict] = []
 
-        # Strategy 1: real <tr> blocks (when the rendered fetcher returns HTML).
+        # Strategy 1: real <tr> blocks from HTML fixtures.
         for raw in re.findall(r"<tr\b[^>]*>(.*?)</tr>", html, flags=re.I | re.S):
             cells = re.findall(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", raw, flags=re.I | re.S)
             cells = [normalize_space(strip_tags(cell)) for cell in cells]
@@ -353,6 +379,9 @@ class ChinaMarathonSource(SourceConnector):
 
         Expected schema (5 columns, but we tolerate fewer/more):
         ``开赛时间 / 比赛名称 / 赛事等级 / 比赛地点 / 比赛项目``.
+
+        Author: juruikang
+        Date: 2026-06-12
         """
         text = " | ".join(cells)
         date = extract_date(cells[0] if cells else "") or extract_date(text)
@@ -387,16 +416,31 @@ class ChinaMarathonSource(SourceConnector):
 
     @staticmethod
     def _normalize_items(text: str) -> str:
+        """Normalize free-form item text into the stored lead item string.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         return infer_items(text)
 
     @staticmethod
     def _split_location(location: str) -> Tuple[str, str]:
+        """Split China Marathon location text into province and city.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         parts = [part.strip() for part in (location or "").split("/") if part.strip()]
         province = parts[0] if parts else ""
         city = parts[1] if len(parts) > 1 else ""
         return province, city
 
     def _row_to_lead(self, row: dict, context: DiscoverContext) -> Optional[Lead]:
+        """Map one parsed table fixture row to a lead.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         cells: Sequence[str] = row.get("cells") or []
         if not cells:
             return None
@@ -424,6 +468,11 @@ class ChinaMarathonSource(SourceConnector):
 
     @staticmethod
     def _page_is_past_window(rows: List[dict], context: DiscoverContext) -> bool:
+        """Return whether a page is already older than the requested window.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         if not context.date_from:
             return False
         earliest = ""
@@ -436,6 +485,11 @@ class ChinaMarathonSource(SourceConnector):
 
     @staticmethod
     def _api_row_is_past_window(row: dict, context: DiscoverContext) -> bool:
+        """Return whether an API row is older than the requested window.
+
+        Author: juruikang
+        Date: 2026-06-12
+        """
         if not context.date_from:
             return False
         date = extract_date(row.get("raceTime") or row.get("raceStartTime") or "")
