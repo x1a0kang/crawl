@@ -94,6 +94,41 @@ from 'output/events.csv'
 with (format csv, header true, null '');
 ```
 
+## 火山豆包联网搜索 Demo
+
+该 demo 是旁路验证工具，不影响 `all` / `extract` 主流程。它读取赛事名称列表，调用火山方舟豆包模型的联网搜索能力，输出 `doubao_events.jsonl` 和 `doubao_events.csv`：
+
+先在 `demos/doubao_web_search_demo.py` 顶部填写：
+
+```python
+ARK_API_KEY = "你的火山方舟APIKey"
+ARK_MODEL = "你的豆包模型ID"
+```
+
+安装依赖：
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+然后运行：
+
+```bash
+python3 demos/doubao_web_search_demo.py \
+  --input marathon_names.csv \
+  --out output/doubao-demo \
+  --sleep-seconds 1
+```
+
+输入支持 CSV 或 TXT。CSV 首行会作为标题跳过；如果标题中包含 `event_name`，会按 `event_name,event_date,province,city` 读取，否则读取第一列作为赛事名称。TXT 为每行一个赛事名称。
+
+默认按火山方舟 Python SDK 的 `client.responses.create(...)` 调用，并固定传入 `tools=[{"type":"web_search","max_keyword":3}]`。
+
+输出说明：
+
+- `doubao_events.csv`：字段顺序对齐 `events.csv`，只写成功解析的行，`status` 固定为 `draft`。
+- `doubao_events.jsonl`：保留每条输入的结构化结果、证据、原始响应和错误信息，便于核验模型是否有证据支撑。
+
 ## 手动种子 CSV
 
 使用 `--sources manual --manual-seeds seeds.csv` 导入。字段建议：
