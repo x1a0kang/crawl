@@ -30,8 +30,6 @@ EVENT_FIELDS = [
     "registration_start_at",
     "registration_end_at",
     "lottery_result_date",
-    "registration_status",
-    "race_status",
     "level_label",
     "certification_label",
     "organizer",
@@ -163,8 +161,6 @@ class EventCandidate:
     registration_start_at: str = ""
     registration_end_at: str = ""
     lottery_result_date: str = ""
-    registration_status: str = "not_started"
-    race_status: str = "upcoming"
     level_label: str = ""
     certification_label: str = ""
     organizer: str = ""

@@ -89,7 +89,7 @@ CSV 使用 `utf-8-sig` 写出，方便表格软件直接打开。
 导入 `events.csv`：
 
 ```sql
-\copy events(name,province,city,district,event_date,item_types,start_time,registration_start_at,registration_end_at,lottery_result_date,registration_status,race_status,level_label,certification_label,organizer,start_point,finish_point,packet_pickup_location,address_text,official_site_url,description,status)
+\copy events(name,province,city,district,event_date,item_types,start_time,registration_start_at,registration_end_at,lottery_result_date,level_label,certification_label,organizer,start_point,finish_point,packet_pickup_location,address_text,official_site_url,description,status)
 from 'output/events.csv'
 with (format csv, header true, null '');
 ```

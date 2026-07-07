@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Optional
 from urllib.request import Request, urlopen
 
@@ -240,8 +240,6 @@ def event_candidate_from_fields(candidate_id_value: str, lead_id: str, fields: D
     event_date = str(fields.get("event_date") or "")
     registration_start = str(fields.get("registration_start_at") or "")
     registration_end = str(fields.get("registration_end_at") or "")
-    race_status = derive_race_status(event_date)
-    registration_status = derive_registration_status(registration_start, registration_end)
     item_types = fields.get("item_types") or []
     if isinstance(item_types, str):
         item_types = extract_item_types(item_types)
@@ -258,8 +256,6 @@ def event_candidate_from_fields(candidate_id_value: str, lead_id: str, fields: D
         registration_start_at=registration_start,
         registration_end_at=registration_end,
         lottery_result_date=str(fields.get("lottery_result_date") or ""),
-        registration_status=str(fields.get("registration_status") or registration_status),
-        race_status=str(fields.get("race_status") or race_status),
         level_label=str(fields.get("level_label") or ""),
         certification_label=str(fields.get("certification_label") or ""),
         organizer=str(fields.get("organizer") or ""),
@@ -309,14 +305,12 @@ def build_field_evidence(
 
 
 def build_candidate_status_evidence(candidate: EventCandidate) -> List[Evidence]:
-    """Build evidence rows for statuses derived by the pipeline.
+    """Build evidence rows for the import publication status.
 
     Author: juruikang
-    Date: 2026-06-12
+    Date: 2026-06-23
     """
     fields = {
-        "registration_status": candidate.registration_status,
-        "race_status": candidate.race_status,
         "status": candidate.status,
     }
     return build_field_evidence(
@@ -324,8 +318,8 @@ def build_candidate_status_evidence(candidate: EventCandidate) -> List[Evidence]
         fields,
         "derived",
         "",
-        source_title="pipeline derived status",
-        extracted_text="registration_status/race_status/status derived from extracted dates and pipeline defaults",
+        source_title="pipeline import status",
+        extracted_text="status derived from pipeline defaults",
         confidence="0.70",
     )
 
@@ -364,44 +358,6 @@ def merge_fields(base: Dict[str, object], incoming: Dict[str, object]) -> None:
                 if item not in existing:
                     existing.append(item)
             base[key] = existing
-
-
-def derive_registration_status(start_at: str, end_at: str, today: Optional[datetime] = None) -> str:
-    """Derive registration status from start/end timestamps.
-
-    Author: juruikang
-    Date: 2026-06-12
-    """
-    now = today or datetime.now(timezone.utc)
-    start = parse_datetime(start_at)
-    end = parse_datetime(end_at)
-    if start and now < start:
-        return "not_started"
-    if start and end and start <= now <= end:
-        return "open"
-    if end and now > end:
-        return "closed"
-    return "not_started"
-
-
-def derive_race_status(event_date: str, today: Optional[date] = None) -> str:
-    """Derive race status from the event date.
-
-    Author: juruikang
-    Date: 2026-06-12
-    """
-    if not event_date:
-        return "upcoming"
-    current = today or date.today()
-    try:
-        value = date.fromisoformat(event_date)
-    except ValueError:
-        return "upcoming"
-    if value > current:
-        return "upcoming"
-    if value == current:
-        return "ongoing"
-    return "ended"
 
 
 def normalize_level_label(value: str) -> str:

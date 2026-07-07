@@ -12,8 +12,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from crawl.extractors.detail import (
     china_marathon_detail_text,
-    derive_race_status,
-    derive_registration_status,
     extract_china_marathon_race_id,
     extract_from_leads,
 )
@@ -192,20 +190,11 @@ class PipelineTest(unittest.TestCase):
                 event_rows = list(csv.DictReader(handle))
             self.assertEqual(event_rows[0]["item_types"], "[\"half_marathon\"]")
             self.assertEqual(event_rows[0]["status"], "draft")
+            self.assertNotIn("registration_status", event_rows[0])
+            self.assertNotIn("race_status", event_rows[0])
             with (out / "evidence.jsonl").open("r", encoding="utf-8") as handle:
                 first = json.loads(handle.readline())
             self.assertIn("candidate_id", first)
-
-    def test_status_derivation(self):
-        from datetime import datetime, timezone
-
-        now = datetime(2026, 3, 10, tzinfo=timezone.utc)
-        self.assertEqual(derive_registration_status("2026-03-01T10:00:00+08:00", "2026-03-20T18:00:00+08:00", today=now), "open")
-        self.assertEqual(derive_registration_status("2026-04-01T10:00:00+08:00", "2026-04-20T18:00:00+08:00", today=now), "not_started")
-        self.assertEqual(derive_registration_status("2026-02-01T10:00:00+08:00", "2026-02-20T18:00:00+08:00", today=now), "closed")
-        self.assertEqual(derive_race_status("2026-04-26", today=date(2026, 3, 10)), "upcoming")
-        self.assertEqual(derive_race_status("2026-03-10", today=date(2026, 3, 10)), "ongoing")
-        self.assertEqual(derive_race_status("2026-02-10", today=date(2026, 3, 10)), "ended")
 
 class EventFormatTest(unittest.TestCase):
     def test_pg_array_literal_emits_json_array_with_quotes(self):
