@@ -17,6 +17,8 @@ def make_lead(
     event_date: str = "",
     province: str = "",
     city: str = "",
+    district: str = "",
+    level_label: str = "",
     event_items: str = "",
     raw_text: str = "",
 ) -> Lead:
@@ -24,7 +26,7 @@ def make_lead(
     name = normalize_space(event_name or title)
     date = event_date or extract_date(raw_text or title)
     items = event_items or infer_items(f"{name} {raw_text}")
-    raw = raw_text or " ".join([title, name, date, city, items])
+    raw = raw_text or " ".join([title, name, date, province, city, district, level_label, items])
     return Lead(
         lead_id=lead_id(source_name, source_url, name, date),
         source_name=source_name,
@@ -34,6 +36,8 @@ def make_lead(
         event_date=date,
         province=normalize_space(province),
         city=normalize_space(city),
+        district=normalize_space(district),
+        level_label=normalize_space(level_label),
         event_items=items,
         discovered_at=now_iso(),
         raw_hash=stable_hash(raw, 24),

@@ -11,7 +11,7 @@ from crawl.models import EventCandidate, Evidence, Lead, now_iso
 from crawl.net import DEFAULT_USER_AGENT
 from crawl.normalize.dates import extract_date
 from crawl.normalize.filters import extract_item_types, is_mvp_race
-from crawl.normalize.text import candidate_id, normalize_event_name, normalize_space
+from crawl.normalize.text import candidate_id, normalize_event_name, normalize_level_label, normalize_space
 
 
 CHINA_MARATHON_DETAIL_API_URL = (
@@ -107,10 +107,10 @@ def build_event_from_lead(lead: Lead) -> EventBuild:
         "name": lead.event_name,
         "province": lead.province,
         "city": lead.city,
-        "district": "",
+        "district": lead.district,
         "event_date": lead.event_date,
         "item_types": item_types,
-        "level_label": "",
+        "level_label": lead.level_label,
         "organizer": "",
         "status": "public",
     }
@@ -166,28 +166,21 @@ def extract_china_marathon_race_id(url: str) -> str:
 def china_marathon_detail_fields(payload: object, lead: Lead) -> Dict[str, object]:
     """Map official detail payload fields to event CSV fields.
 
+    The search/list API already provides name, province, city, district,
+    event_date, item_types, and level_label. Only organizer requires the
+    detail API call.
+
     Author: juruikang
     Date: 2026-06-12
     """
     detail = china_marathon_detail_object(payload)
     if not detail:
         return {}
-    province = normalize_space(detail.get("province") or lead.province)
-    city = normalize_space(detail.get("city") or lead.city)
-    district = normalize_space(detail.get("area") or "")
-    project = normalize_space(detail.get("project") or lead.event_items)
-    name = normalize_space(detail.get("name") or lead.event_name)
-    fields: Dict[str, object] = {
-        "name": name,
-        "province": province,
-        "city": city,
-        "district": district,
-        "event_date": extract_date(detail.get("gameDate") or "") or lead.event_date,
-        "item_types": extract_item_types(f"{name} {project} {lead.event_items}"),
-        "level_label": normalize_level_label(detail.get("raceGrade") or ""),
-        "organizer": normalize_space(detail.get("compNameOrganizer") or ""),
-    }
-    return {key: value for key, value in fields.items() if value}
+    organizer = normalize_space(detail.get("compNameOrganizer") or "")
+    fields: Dict[str, object] = {}
+    if organizer:
+        fields["organizer"] = organizer
+    return fields
 
 
 def china_marathon_detail_object(payload: object) -> Dict[str, object]:
@@ -345,23 +338,6 @@ def merge_fields(base: Dict[str, object], incoming: Dict[str, object]) -> None:
                 if item not in existing:
                     existing.append(item)
             base[key] = existing
-
-
-def normalize_level_label(value: str) -> str:
-    """Clean China Marathon race grade labels.
-
-    Author: juruikang
-    Date: 2026-06-12
-    """
-    text = normalize_space(value)
-    # 去掉 "属地办赛" 等描述后缀，兼容以下真实形态：
-    #   "C 属地办赛"      （半角空格）
-    #   "C（属地办赛）"   （全角左括号，无空格）
-    #   "C(属地办赛)"     （半角括号）
-    cleaned = re.sub(r"[\s（(]*属地办赛.*$", "", text)
-    if cleaned in {"A", "B", "C"}:
-        return cleaned
-    return cleaned or text
 
 
 def normalize_datetime(value: str) -> str:

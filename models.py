@@ -14,6 +14,8 @@ LEAD_FIELDS = [
     "event_date",
     "province",
     "city",
+    "district",
+    "level_label",
     "event_items",
     "discovered_at",
     "raw_hash",
@@ -103,9 +105,11 @@ class Lead:
     event_date: str
     province: str
     city: str
-    event_items: str
-    discovered_at: str
-    raw_hash: str
+    district: str = ""
+    level_label: str = ""
+    event_items: str = ""
+    discovered_at: str = ""
+    raw_hash: str = ""
 
     def to_row(self) -> Dict[str, str]:
         """Convert this lead to a CSV row.

@@ -29,3 +29,20 @@ def lead_id(source_name: str, source_url: str, event_name: str, event_date: str 
 
 def candidate_id(normalized_name: str, event_date: str, city: str) -> str:
     return stable_hash("|".join([normalized_name, event_date, city]))
+
+
+def normalize_level_label(value: str) -> str:
+    """Clean China Marathon race grade labels.
+
+    Strips suffixes like "属地办赛" (with optional brackets/spaces).
+    Returns the cleaned label. If result is not A/B/C, returns the cleaned
+    original text.
+
+    Author: juruikang
+    Date: 2026-06-12
+    """
+    text = normalize_space(value)
+    cleaned = re.sub(r"[\s（(]*属地办赛.*$", "", text)
+    if cleaned in {"A", "B", "C"}:
+        return cleaned
+    return cleaned or text

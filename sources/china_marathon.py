@@ -24,6 +24,7 @@ from crawl.models import DiscoverContext, Lead, SourceConnector
 from crawl.net import DEFAULT_USER_AGENT
 from crawl.normalize.dates import extract_date
 from crawl.normalize.filters import infer_items
+from crawl.normalize.text import normalize_level_label
 from crawl.sources.common import make_lead
 
 
@@ -249,7 +250,7 @@ class ChinaMarathonSource(SourceConnector):
             return None
         event_date = extract_date(row.get("raceTime") or row.get("raceStartTime") or "")
         address = normalize_space(row.get("raceAddress") or "")
-        province, city = self._split_location(address)
+        province, city, district = self._split_location(address)
         items = self._normalize_items(row.get("raceItem") or title)
         if not items:
             return None
@@ -257,12 +258,13 @@ class ChinaMarathonSource(SourceConnector):
         source_url = f"{SOURCE_REF_PREFIX}page={page}"
         if race_id:
             source_url = f"{SOURCE_REF_PREFIX}race_id={race_id};page={page}"
+        level_label = normalize_level_label(row.get("raceGrade") or "")
         raw_text = " ".join(
             str(part)
             for part in [
                 title,
                 event_date,
-                row.get("raceGrade") or "",
+                level_label,
                 address,
                 row.get("raceItem") or "",
             ]
@@ -276,6 +278,8 @@ class ChinaMarathonSource(SourceConnector):
             event_date=event_date,
             province=province,
             city=city,
+            district=district,
+            level_label=level_label,
             event_items=items,
             raw_text=raw_text,
         )
@@ -393,9 +397,10 @@ class ChinaMarathonSource(SourceConnector):
         location = cells[3] if len(cells) > 3 else ""
         province = ""
         city = ""
+        district = ""
         if location:
             if "/" in location:
-                province, city = ChinaMarathonSource._split_location(location)
+                province, city, district = ChinaMarathonSource._split_location(location)
             else:
                 match = PROVINCE_CITY_PATTERN.search(location)
                 if match:
@@ -403,6 +408,8 @@ class ChinaMarathonSource(SourceConnector):
                     city = match.group("city").strip()
                 else:
                     city = location.strip()
+        grade = cells[2] if len(cells) > 2 else ""
+        level_label = normalize_level_label(grade)
         item_text = f"{title} {cells[4] if len(cells) > 4 else ''}"
         items = ChinaMarathonSource._normalize_items(item_text)
         return {
@@ -410,6 +417,8 @@ class ChinaMarathonSource(SourceConnector):
             "title": title,
             "province": province,
             "city": city,
+            "district": district,
+            "level_label": level_label,
             "event_items": items,
             "text": text,
         }
@@ -424,8 +433,10 @@ class ChinaMarathonSource(SourceConnector):
         return infer_items(text)
 
     @staticmethod
-    def _split_location(location: str) -> Tuple[str, str]:
-        """Split China Marathon location text into province and city.
+    def _split_location(location: str) -> Tuple[str, str, str]:
+        """Split China Marathon location text into province, city, and district.
+
+        Address format is "省/市/区" with '/' separator.
 
         Author: juruikang
         Date: 2026-06-12
@@ -433,7 +444,8 @@ class ChinaMarathonSource(SourceConnector):
         parts = [part.strip() for part in (location or "").split("/") if part.strip()]
         province = parts[0] if parts else ""
         city = parts[1] if len(parts) > 1 else ""
-        return province, city
+        district = parts[2] if len(parts) > 2 else ""
+        return province, city, district
 
     def _row_to_lead(self, row: dict, context: DiscoverContext) -> Optional[Lead]:
         """Map one parsed table fixture row to a lead.
@@ -462,6 +474,8 @@ class ChinaMarathonSource(SourceConnector):
             event_date=fields["event_date"],
             province=fields["province"],
             city=fields["city"],
+            district=fields.get("district", ""),
+            level_label=fields.get("level_label", ""),
             event_items=items,
             raw_text=fields["text"],
         )

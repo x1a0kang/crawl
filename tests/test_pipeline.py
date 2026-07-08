@@ -30,7 +30,7 @@ from crawl.models import (
 )
 from crawl.normalize.dedupe import dedupe_candidates
 from crawl.normalize.filters import extract_item_types, is_mvp_race
-from crawl.extractors.detail import normalize_level_label
+from crawl.normalize.text import normalize_level_label
 from crawl.sources.china_marathon import ChinaMarathonSource
 from crawl.sources.sport_china import SportChinaSource
 from crawl.sources.zuicool import ZuicoolSource
@@ -128,7 +128,8 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("安徽省", text)
         self.assertIn("全程,半程", text)
 
-    def test_china_marathon_internal_source_ref_fetches_detail(self):
+    def test_china_marathon_detail_api_fills_organizer(self):
+        """Detail API should only fill organizer; district/level come from lead (search API)."""
         lead = Lead(
             lead_id="l1",
             source_name="china-marathon",
@@ -138,20 +139,15 @@ class PipelineTest(unittest.TestCase):
             event_date="2026-04-26",
             province="安徽省",
             city="蚌埠市",
-            event_items="全程马拉松,半程马拉松",
+            district="蚌山区",
+            level_label="A",
+            event_items="全程马拉松,半程马拉松,10公里",
             discovered_at=now_iso(),
             raw_hash="abc",
         )
         payload = {
             "data": {
                 "ssdetails": {
-                    "name": "2026蚌埠马拉松",
-                    "raceGrade": "A",
-                    "province": "安徽省",
-                    "city": "蚌埠市",
-                    "area": "蚌山区",
-                    "gameDate": "2026.04.26",
-                    "project": "全程,半程,10公里",
                     "compNameOrganizer": "蚌埠市人民政府",
                 }
             }
