@@ -189,7 +189,8 @@ def call_model(client, prompt):
                 "max_keyword": 5,
                 "limit": 15
             }
-        ]
+        ],
+        thinking={"type": "disabled"},
     )
 
 
