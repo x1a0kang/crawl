@@ -99,7 +99,7 @@ class PipelineTest(unittest.TestCase):
         candidates, evidence = extract_from_leads([lead, lead])
         deduped = dedupe_candidates(candidates)
         self.assertEqual(len(deduped), 1)
-        self.assertEqual(deduped[0].status, "draft")
+        self.assertEqual(deduped[0].status, "public")
         self.assertEqual(deduped[0].item_types, ["full_marathon"])
         self.assertFalse(any(item.field_name == "manual_search_query" for item in evidence))
 
@@ -189,7 +189,7 @@ class PipelineTest(unittest.TestCase):
             with (out / "events.csv").open("r", encoding="utf-8-sig") as handle:
                 event_rows = list(csv.DictReader(handle))
             self.assertEqual(event_rows[0]["item_types"], "[\"half_marathon\"]")
-            self.assertEqual(event_rows[0]["status"], "draft")
+            self.assertEqual(event_rows[0]["status"], "public")
             self.assertNotIn("registration_status", event_rows[0])
             self.assertNotIn("race_status", event_rows[0])
             with (out / "evidence.jsonl").open("r", encoding="utf-8") as handle:

@@ -26,19 +26,8 @@ EVENT_FIELDS = [
     "district",
     "event_date",
     "item_types",
-    "start_time",
-    "registration_start_at",
-    "registration_end_at",
-    "lottery_result_date",
     "level_label",
-    "certification_label",
     "organizer",
-    "start_point",
-    "finish_point",
-    "packet_pickup_location",
-    "address_text",
-    "official_site_url",
-    "description",
     "status",
 ]
 
@@ -157,20 +146,9 @@ class EventCandidate:
     district: str
     event_date: str
     item_types: List[str]
-    start_time: str = ""
-    registration_start_at: str = ""
-    registration_end_at: str = ""
-    lottery_result_date: str = ""
     level_label: str = ""
-    certification_label: str = ""
     organizer: str = ""
-    start_point: str = ""
-    finish_point: str = ""
-    packet_pickup_location: str = ""
-    address_text: str = ""
-    official_site_url: str = ""
-    description: str = ""
-    status: str = "draft"
+    status: str = "public"
 
     def to_row(self) -> Dict[str, str]:
         """Convert this event candidate to a CSV row.

@@ -110,8 +110,9 @@ def build_event_from_lead(lead: Lead) -> EventBuild:
         "district": "",
         "event_date": lead.event_date,
         "item_types": item_types,
-        "address_text": " ".join(part for part in [lead.province, lead.city] if part),
-        "status": "draft",
+        "level_label": "",
+        "organizer": "",
+        "status": "public",
     }
     evidence = build_field_evidence("", fields, "official_index", lead.source_url, lead.raw_title)
     return EventBuild(fields=fields, evidence=evidence)
@@ -185,7 +186,6 @@ def china_marathon_detail_fields(payload: object, lead: Lead) -> Dict[str, objec
         "item_types": extract_item_types(f"{name} {project} {lead.event_items}"),
         "level_label": normalize_level_label(detail.get("raceGrade") or ""),
         "organizer": normalize_space(detail.get("compNameOrganizer") or ""),
-        "address_text": " ".join(part for part in [province, city, district] if part),
     }
     return {key: value for key, value in fields.items() if value}
 
@@ -238,8 +238,6 @@ def event_candidate_from_fields(candidate_id_value: str, lead_id: str, fields: D
     Date: 2026-06-12
     """
     event_date = str(fields.get("event_date") or "")
-    registration_start = str(fields.get("registration_start_at") or "")
-    registration_end = str(fields.get("registration_end_at") or "")
     item_types = fields.get("item_types") or []
     if isinstance(item_types, str):
         item_types = extract_item_types(item_types)
@@ -252,20 +250,9 @@ def event_candidate_from_fields(candidate_id_value: str, lead_id: str, fields: D
         district=str(fields.get("district") or ""),
         event_date=event_date,
         item_types=list(item_types),
-        start_time=str(fields.get("start_time") or ""),
-        registration_start_at=registration_start,
-        registration_end_at=registration_end,
-        lottery_result_date=str(fields.get("lottery_result_date") or ""),
         level_label=str(fields.get("level_label") or ""),
-        certification_label=str(fields.get("certification_label") or ""),
         organizer=str(fields.get("organizer") or ""),
-        start_point=str(fields.get("start_point") or ""),
-        finish_point=str(fields.get("finish_point") or ""),
-        packet_pickup_location=str(fields.get("packet_pickup_location") or ""),
-        address_text=str(fields.get("address_text") or ""),
-        official_site_url=str(fields.get("official_site_url") or ""),
-        description=str(fields.get("description") or ""),
-        status=str(fields.get("status") or "draft"),
+        status=str(fields.get("status") or "public"),
     )
 
 
