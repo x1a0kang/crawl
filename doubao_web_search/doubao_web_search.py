@@ -136,21 +136,30 @@ def build_prompt(event):
 
 输出 JSON 结构要求：
 - 顶层必须是一个对象，包含 event 和 items 两个字段，不要输出数组。
-- event.name 使用赛事名称，event.province/event.city/event.district 使用给定行政区，event.eventDate 使用 yyyy-MM-dd。
+
+event 字段要求：
+- event.name、event.province、event.city、event.district、event.eventDate 必须使用赛事信息中给定的值，eventDate 格式为 yyyy-MM-dd。
+- event.levelLabel、event.organizer：若赛事信息中已给出，则必须直接使用该值，不要自己编造；仅当赛事信息中为 null 时才通过搜索补全，levelLabel 只能是 A、B、C 或 null。
 - event.startTime 使用 HH:mm:ss 或 null。
 - event.registrationStartAt 和 event.registrationEndAt 使用 yyyy-MM-dd HH:mm:ss 或 null。
-- event.registrationMode 只能是 direct、lottery 或 null。
-- event.lotteryResultDate 使用 yyyy-MM-dd 或 null。
-- event.levelLabel 只能是 A、B、C 或 null。
+- event.registrationMode 只能是 direct（直报）、lottery（抽签）或 null。
+- event.lotteryResultDate 使用 yyyy-MM-dd 或 null，仅抽签赛事建议填写。
 - event.certificationLabel 只能是 标牌、精英标、金标、白金标 或 null。
-- event.registrationChannel 如能确认，格式为 渠道类型-渠道名称，多个渠道用英文逗号分隔；渠道只能是：官网，小程序，公众号，APP，禁止出现其他渠道；不能确认时则为 null。
-- event.seriesKey 尽量生成稳定英文小写下划线标识；不能确认同一赛事系列时为 null。
+- event.organizer 是主办方，无明确来源时为 null。
+- event.registrationChannel 如能确认，格式为 渠道类型-渠道名称，多个渠道用英文逗号分隔，例如：公众号-上马网,小程序-汇赛通,APP-上马网,官网-上马网；渠道只能是：官网，小程序，公众号，APP，禁止出现其他渠道；不能确认时则为 null。
+- event.packetPickupLocation 是赛事级统一领物地点，无明确来源时使用 null。
+- event.description 是赛事简介，无明确来源时使用 null。
+- event.seriesKey 尽量生成稳定英文小写下划线标识（例如 shanghai_marathon），用于关联同一赛事不同年份；不能确认同一赛事系列时为 null。
 - event.status 固定为 published。
-- event.packetPickupLocation 是领物地点，无明确来源时使用 null。
-- items 至少包含一个项目；itemType 只能是 full_marathon、half_marathon、ten_km。
-- 起点 startPoint 和终点 finishPoint 必须放在 items[] 中，不要放在 event 中。
-- distanceKm、feeAmount、quotaCount无明确来源时使用 null。
-- 没有可靠来源时不要生成 registeredCount 字段。
+
+items 字段要求（每个赛事至少一个项目）：
+- 若赛事信息中的 itemTypes 非空，则 items 必须与 itemTypes 中的项目类型一一对应，不要增加或减少；每个 item 的 itemType 只能是 full_marathon（全马 42.195km）、half_marathon（半马 21.0975km）、ten_km（10km）。
+- 起点 startPoint（项目起点）和终点 finishPoint（项目终点）必须放在 items[] 中，不要放在 event 中；建议尽量填写，无明确来源时为 null。
+- distanceKm：项目距离（单位 km），全马 42.195、半马 21.0975、十公里 10，不能为空。
+- feeAmount：报名费（单位currency），数字类型；无明确来源时使用 null。
+- currency：币种，国内赛事默认填 CNY；无明确来源时使用 null。
+- quotaCount：项目规模，即报名人数名额，整数类型；无明确来源时使用 null。
+- registeredCount：已报名人数，整数类型；没有可靠来源时禁止生成该字段。
 """.strip()
 
 
