@@ -1,0 +1,191 @@
+[
+{
+  "event": {
+    "name": "2026杭州女子半程马拉松",
+    "province": "浙江省",
+    "city": "杭州市",
+    "district": "拱墅区",
+    "eventDate": "2026-04-26",
+    "startTime": "07:00:00",
+    "registrationStartAt": "2026-03-31 10:00:00",
+    "registrationEndAt": "2026-04-06 18:00:00",
+    "registrationMode": "lottery",
+    "lotteryResultDate": "2026-04-14",
+    "levelLabel": "C",
+    "certificationLabel": null,
+    "registrationChannel": "官网-杭州女子半程马拉松官网,公众号-杭州女子半程马拉松,公众号-杭州体育,小程序-果动赛事",
+    "seriesKey": "hangzhou_women_half_marathon",
+    "status": "published"
+  },
+  "items": [
+    {
+      "itemType": "half_marathon",
+      "startPoint": "武林广场",
+      "finishPoint": "杭州大剧院",
+      "distanceKm": 21.0975,
+      "feeAmount": 150,
+      "quotaCount": 12000,
+      "packetPickupLocation": "浙江展览馆南广场"
+    }
+  ]
+},
+{
+  "event": {
+    "name": "2026汉源湖半程马拉松",
+    "province": "四川省",
+    "city": "雅安市",
+    "district": "汉源县",
+    "eventDate": "2026-04-26",
+    "startTime": "07:30:00",
+    "registrationStartAt": null,
+    "registrationEndAt": null,
+    "registrationMode": null,
+    "lotteryResultDate": null,
+    "levelLabel": null,
+    "certificationLabel": null,
+    "registrationChannel": null,
+    "seriesKey": "hanyuanhu_half_marathon",
+    "status": "published"
+  },
+  "items": [
+    {
+      "itemType": "half_marathon",
+      "distanceKm": 21.0975,
+      "startPoint": "汉源万合酒店",
+      "finishPoint": "汉源万合酒店",
+      "feeAmount": null,
+      "quotaCount": 3000,
+      "packetPickupLocation": null
+    }
+  ]
+},
+{
+  "event": {
+    "name": "2026汶川马拉松",
+    "province": "四川省",
+    "city": "阿坝藏族羌族自治州",
+    "district": "汶川县",
+    "eventDate": "2026-04-26",
+    "startTime": "08:00:00",
+    "registrationStartAt": null,
+    "registrationEndAt": null,
+    "registrationMode": null,
+    "lotteryResultDate": null,
+    "levelLabel": null,
+    "certificationLabel": null,
+    "registrationChannel": null,
+    "seriesKey": "wenchuan_marathon",
+    "status": "published"
+  },
+  "items": [
+    {
+      "itemType": "full_marathon",
+      "startPoint": "映秀爱立方",
+      "finishPoint": "阿坝师范学院",
+      "distanceKm": 42.195,
+      "feeAmount": null,
+      "quotaCount": null,
+      "packetPickupLocation": null
+    },
+    {
+      "itemType": "half_marathon",
+      "startPoint": "映秀爱立方",
+      "finishPoint": "阿坝师范学院",
+      "distanceKm": 21.0975,
+      "feeAmount": null,
+      "quotaCount": null,
+      "packetPickupLocation": null
+    }
+  ]
+},
+{
+  "event": {
+    "name": "2026于都半程马拉松",
+    "province": "江西省",
+    "city": "赣州市",
+    "district": "于都县",
+    "eventDate": "2026-04-26",
+    "startTime": "07:00:00",
+    "registrationStartAt": "2026-03-30 15:00:00",
+    "registrationEndAt": "2026-04-10 15:00:00",
+    "registrationMode": "lottery",
+    "lotteryResultDate": "2026-04-14",
+    "levelLabel": "B",
+    "certificationLabel": null,
+    "registrationChannel": "app-数字心动,official_wechat-于都教体局,official_wechat-于都发布",
+    "seriesKey": "yudu_half_marathon",
+    "status": "published"
+  },
+  "items": [
+    {
+      "itemType": "half_marathon",
+      "distanceKm": 21.0975,
+      "startPoint": "中央红军长征集结出发地纪念园",
+      "finishPoint": "于都体育中心",
+      "feeAmount": 128,
+      "quotaCount": 10000,
+      "packetPickupLocation": null
+    }
+  ]
+},
+{
+  "event": {
+    "name": "2026湘江半程马拉松",
+    "province": "湖南省",
+    "city": "长沙市",
+    "district": "天心区",
+    "eventDate": "2026-04-26",
+    "startTime": "07:00:00",
+    "registrationStartAt": "2026-03-05 10:00:00",
+    "registrationEndAt": "2026-03-12 10:00:00",
+    "registrationMode": "lottery",
+    "lotteryResultDate": "2026-03-26",
+    "levelLabel": "A",
+    "certificationLabel": null,
+    "registrationChannel": "官方网站-湘江半程马拉松官方网站,官方微信公众号-湘江半程马拉松",
+    "seriesKey": "xiangjiang_half_marathon",
+    "status": "published"
+  },
+  "items": [
+    {
+      "itemType": "half_marathon",
+      "startPoint": "长沙贺龙体育场南门",
+      "finishPoint": "长沙贺龙体育场南门",
+      "distanceKm": 21.0975,
+      "feeAmount": 150,
+      "quotaCount": 15000,
+      "packetPickupLocation": "白沙广场(贺龙体育场东广场)"
+    }
+  ]
+},
+{
+  "event": {
+    "name": "2026云竹湖半程马拉松",
+    "province": "山西省",
+    "city": "晋中市",
+    "district": "榆社县",
+    "eventDate": "2026-04-26",
+    "startTime": "08:00:00",
+    "registrationStartAt": "2026-03-02 10:00:00",
+    "registrationEndAt": "2026-04-02 17:00:00",
+    "registrationMode": "direct",
+    "lotteryResultDate": null,
+    "levelLabel": null,
+    "certificationLabel": null,
+    "registrationChannel": "app-数字心动,官网-博润体育官网,app-马拉马拉,app-高德地图",
+    "seriesKey": "yunzhuhu_half_marathon",
+    "status": "published"
+  },
+  "items": [
+    {
+      "itemType": "half_marathon",
+      "startPoint": "阳光水岸酒店东门",
+      "finishPoint": "云繁星野奢帐篷度假酒店东500米",
+      "distanceKm": 21.0975,
+      "feeAmount": 98,
+      "quotaCount": 3000,
+      "packetPickupLocation": "云竹湖游客接待中心"
+    }
+  ]
+}
+]
