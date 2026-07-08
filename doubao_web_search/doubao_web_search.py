@@ -366,12 +366,12 @@ def process_event(client, event, process_info_file=None):
     """Process one event row through prompt generation, model call, and JSON parsing."""
     logging.info("Processing row %s: %s", event["rowNumber"], event["name"])
     prompt = build_prompt(event)
-    logging.info(
-        "Prompt for row %s (%s):\n%s",
-        event["rowNumber"],
-        event["name"],
-        prompt,
-    )
+    # logging.info(
+    #     "Prompt for row %s (%s):\n%s",
+    #     event["rowNumber"],
+    #     event["name"],
+    #     prompt,
+    # )
 
     try:
         # Call the model once for this CSV row.
