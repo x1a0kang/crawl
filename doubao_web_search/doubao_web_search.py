@@ -126,7 +126,8 @@ def build_prompt(event):
     event_context = json.dumps(event, ensure_ascii=False, indent=2)
     return f"""
 你是马拉松赛事数据整理助手。请根据下面给出的赛事信息，联网搜索该赛事今年对应届次的公开信息，并输出一个可用于赛事导入的 JSON 对象。
-联网搜索的关键词必须包括：赛事名称;官宣;定档;报名;比赛线路;开跑;malasong5。
+联网搜索的关键词必须包括：赛事名称;报名;官宣;比赛线路;开跑;
+优先引用malsong5.com、最酷、我要赛、政府官网、体育局官网、赛事官方公众号/官网
 
 赛事信息：
 {event_context}
@@ -181,7 +182,8 @@ def call_model(client, prompt):
         tools=[
             {
                 "type": "web_search",
-                "max_keyword": 10,
+                "max_keyword": 5,
+                "limit": 15
             }
         ]
     )
