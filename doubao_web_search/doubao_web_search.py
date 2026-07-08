@@ -9,6 +9,8 @@ import csv
 import json
 import logging
 import os
+import urllib.request
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +28,8 @@ ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 API_KEY = "68bfba1d-95d1-4183-8f83-da63f989fe0b"
 REQUEST_TIMEOUT_SECONDS = 300
 REQUEST_MAX_RETRIES = 0
+IMPORT_API_URL = "http://localhost:80/api/events/import"
+IMPORT_HTTP_TIMEOUT = 30
 REQUIRED_COLUMNS = {"name", "event_date", "province", "city", "district"}
 STRICT_PROMPT_RULE = (
     "搜索中没有明确获取到的字段禁止猜测，值用null表示，往年的赛事信息如规模，"
@@ -306,6 +310,36 @@ def build_failure_result(event, error, raw_response=None):
     return failure
 
 
+def import_event(result):
+    """POST a single event result to the import API endpoint."""
+    payload = json.dumps([result], ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        IMPORT_API_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=IMPORT_HTTP_TIMEOUT) as response:
+            response_body = response.read().decode("utf-8")
+            logging.info(
+                "Import API responded with status %s: %s",
+                response.status,
+                response_body[:500],
+            )
+            return True
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        logging.error(
+            "Import API HTTP error %s: %s",
+            exc.code,
+            error_body[:500],
+        )
+    except Exception as exc:
+        logging.error("Import API request failed: %s", exc)
+    return False
+
+
 def get_process_info_path(output_json):
     """Build the sidecar process-info JSONL path from the output JSON path."""
     output_path = Path(output_json)
@@ -410,6 +444,8 @@ def main():
     process_info_path = get_process_info_path(args.output_json)
     logging.info("Writing process info to %s", process_info_path)
     written_count = 0
+    success_count = 0
+    import_success_count = 0
     try:
         for event in events:
             # Continue after per-row failures so every CSV row is attempted.
@@ -421,11 +457,22 @@ def main():
                 event["rowNumber"],
                 args.output_json,
             )
+            # Call import API for successful results only (failures have an "error" key).
+            if "error" not in result:
+                success_count += 1
+                if import_event(result):
+                    import_success_count += 1
+            else:
+                logging.warning(
+                    "Skipping import for row %s due to processing error",
+                    event["rowNumber"],
+                )
     finally:
         close_results_writer(json_file)
         process_info_file.close()
 
     logging.info("Wrote %s results to %s", written_count, args.output_json)
+    logging.info("Processed %s successful results, imported %s via API", success_count, import_success_count)
     logging.info("Wrote process info to %s", process_info_path)
 
 
