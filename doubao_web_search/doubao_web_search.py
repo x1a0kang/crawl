@@ -30,6 +30,7 @@ REQUIRED_COLUMNS = {"name", "event_date", "province", "city", "district"}
 STRICT_PROMPT_RULE = (
     "搜索中没有明确获取到的字段禁止猜测，值用null表示，往年的赛事信息如规模，"
     "不是同一年的起终点等信息禁止填充到今年的赛事"
+    "赛事信息中的所有内容绝对正确，必须填充到输出的对应字段中"
     "直接输出json，禁止输出除 json 外的任何内容"
 )
 
@@ -95,6 +96,15 @@ def read_events(input_csv):
         events = []
         for row_index, row in enumerate(reader, start=2):
             # Keep only the deterministic fields used to identify the event.
+            raw_item_types = (row.get("item_types") or "").strip()
+            if raw_item_types:
+                try:
+                    item_types = json.loads(raw_item_types)
+                except json.JSONDecodeError:
+                    item_types = None
+            else:
+                item_types = None
+
             event = {
                 "rowNumber": row_index,
                 "name": (row.get("name") or "").strip(),
@@ -102,6 +112,9 @@ def read_events(input_csv):
                 "province": (row.get("province") or "").strip(),
                 "city": (row.get("city") or "").strip(),
                 "district": (row.get("district") or "").strip() or None,
+                "itemTypes": item_types,
+                "levelLabel": (row.get("level_label") or "").strip() or None,
+                "organizer": (row.get("organizer") or "").strip() or None,
             }
             events.append(event)
 
@@ -112,9 +125,10 @@ def build_prompt(event):
     """Build the model prompt for one event according to import JSON rules."""
     event_context = json.dumps(event, ensure_ascii=False, indent=2)
     return f"""
-你是马拉松赛事数据整理助手。请根据下面给出的赛事名称、日期、省市区，联网搜索该赛事今年对应届次的公开信息，并输出一个可用于赛事导入的 JSON 对象。
+你是马拉松赛事数据整理助手。请根据下面给出的赛事信息，联网搜索该赛事今年对应届次的公开信息，并输出一个可用于赛事导入的 JSON 对象。
+联网搜索的关键词必须包括：赛事名称;官宣;定档;报名;比赛线路;开跑;malasong5。
 
-赛事定位信息：
+赛事信息：
 {event_context}
 
 必须遵守：
@@ -158,7 +172,7 @@ def call_model(client, prompt):
         tools=[
             {
                 "type": "web_search",
-                "max_keyword": 3,
+                "max_keyword": 10,
             }
         ]
     )
@@ -307,12 +321,12 @@ def process_event(client, event, process_info_file=None):
     """Process one event row through prompt generation, model call, and JSON parsing."""
     logging.info("Processing row %s: %s", event["rowNumber"], event["name"])
     prompt = build_prompt(event)
-    # logging.info(
-    #     "Prompt for row %s (%s):\n%s",
-    #     event["rowNumber"],
-    #     event["name"],
-    #     prompt,
-    # )
+    logging.info(
+        "Prompt for row %s (%s):\n%s",
+        event["rowNumber"],
+        event["name"],
+        prompt,
+    )
 
     try:
         # Call the model once for this CSV row.
