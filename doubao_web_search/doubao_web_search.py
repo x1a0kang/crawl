@@ -461,8 +461,15 @@ def main():
             # Call import API for successful results only (failures have an "error" key).
             if "error" not in result:
                 success_count += 1
+                event_name = (result.get("event") or {}).get("name", event["name"])
                 if import_event(result):
                     import_success_count += 1
+                else:
+                    logging.error(
+                        "Import API failed for row %s: %s",
+                        event["rowNumber"],
+                        event_name,
+                    )
             else:
                 logging.warning(
                     "Skipping import for row %s due to processing error",
